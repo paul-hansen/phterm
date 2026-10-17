@@ -1,0 +1,238 @@
+name: release
+
+# Builds release packages for Linux, macOS and Windows and publishes them
+# as a GitHub release on this repository.
+#
+# Trigger it either by pushing a tag (`ci/tag.sh && git push --tags`), or
+# by running the workflow manually from the Actions tab, which tags the
+# selected commit for you.
+#
+# Tags must start with a digit (the default `ci/tag-name.sh` scheme is
+# `YYYYMMDD-HHMMSS-<hash>`) because the tag is used as the .deb version.
+
+on:
+  push:
+    tags:
+      - "20*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create (default: output of ci/tag-name.sh)"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: "Determine tag name"
+        id: tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+          elif [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag=$(ci/tag-name.sh)
+          fi
+          if [[ ! "$tag" =~ ^[0-9] ]]; then
+            echo "::error::Tag '$tag' must start with a digit (it is used as the package version)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
+
+  linux:
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Older glibc: the .deb/.tar.xz from here run on most distros
+          - image: "ubuntu:22.04"
+            appimage: false
+          - image: "ubuntu:26.04"
+            appimage: true
+    container:
+      image: ${{ matrix.image }}
+      # Needed for FUSE when building the AppImage
+      options: --privileged
+    env:
+      TAG_NAME: ${{ needs.meta.outputs.tag }}
+    steps:
+      - name: "Install git and curl"
+        shell: bash
+        run: |
+          echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+          apt-get update
+          apt-get install -y git curl
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v5
+        with:
+          submodules: "recursive"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: "Install System Deps"
+        shell: bash
+        run: "env CI=yes PATH=$PATH ./get-deps"
+      - name: "Build (Release mode)"
+        shell: bash
+        run: |
+          for pkg in wezterm wezterm-gui wezterm-mux-server strip-ansi-escapes ; do
+            cargo build -p $pkg --release
+          done
+      - name: "Package"
+        shell: bash
+        run: "bash ci/deploy.sh"
+      - name: "Source Tarball"
+        if: matrix.appimage
+        shell: bash
+        run: "bash ci/source-archive.sh"
+      - name: "Build AppImage"
+        if: matrix.appimage
+        shell: bash
+        run: |
+          apt-get install -y libfuse2 file
+          bash ci/appimage.sh
+      - name: "Upload artifact"
+        uses: actions/upload-artifact@v7
+        with:
+          name: "linux-${{ strategy.job-index }}"
+          if-no-files-found: error
+          path: |
+            wezterm-*.deb
+            wezterm-*.xz
+            *src.tar.gz
+            *.AppImage
+            *.AppImage.zsync
+
+  macos:
+    needs: meta
+    runs-on: macos-latest
+    env:
+      TAG_NAME: ${{ needs.meta.outputs.tag }}
+      MACOSX_DEPLOYMENT_TARGET: "10.12"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: "recursive"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: "x86_64-apple-darwin,aarch64-apple-darwin"
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: "Install System Deps"
+        shell: bash
+        run: "env CI=yes PATH=$PATH ./get-deps"
+      - name: "Build universal binaries (Release mode)"
+        shell: bash
+        run: |
+          for target in x86_64-apple-darwin aarch64-apple-darwin ; do
+            for pkg in wezterm wezterm-gui wezterm-mux-server strip-ansi-escapes ; do
+              cargo build --target $target -p $pkg --release
+            done
+          done
+      - name: "Package"
+        shell: bash
+        # Code signing and notarization only happen if these secrets are set
+        env:
+          MACOS_APPLEID: ${{ secrets.MACOS_APPLEID }}
+          MACOS_APP_PW: ${{ secrets.MACOS_APP_PW }}
+          MACOS_CERT: ${{ secrets.MACOS_CERT }}
+          MACOS_CERT_PW: ${{ secrets.MACOS_CERT_PW }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: "bash ci/deploy.sh"
+      - name: "Upload artifact"
+        uses: actions/upload-artifact@v7
+        with:
+          name: "macos"
+          if-no-files-found: error
+          path: "WezTerm-*.zip"
+
+  windows:
+    needs: meta
+    runs-on: windows-2025
+    env:
+      TAG_NAME: ${{ needs.meta.outputs.tag }}
+      RUSTUP_WINDOWS_PATH_ADD_BIN: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: "recursive"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: "x86_64-pc-windows-msvc"
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: "Build (Release mode)"
+        # Strawberry perl is needed to build the vendored openssl
+        shell: cmd
+        run: |
+          PATH C:\Strawberry\perl\bin;%PATH%
+          cargo build -p wezterm --release || exit /b 1
+          cargo build -p wezterm-gui --release || exit /b 1
+          cargo build -p wezterm-mux-server --release || exit /b 1
+          cargo build -p strip-ansi-escapes --release || exit /b 1
+      - name: "Package"
+        shell: bash
+        run: "bash ci/deploy.sh"
+      - name: "Upload artifact"
+        uses: actions/upload-artifact@v7
+        with:
+          name: "windows"
+          if-no-files-found: error
+          path: |
+            WezTerm-*.zip
+            WezTerm-*.exe
+
+  release:
+    needs: [meta, linux, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG_NAME: ${{ needs.meta.outputs.tag }}
+      PRERELEASE: ${{ inputs.prerelease && '--prerelease' || '' }}
+    steps:
+      - name: "Download artifacts"
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: "Checksum"
+        shell: bash
+        working-directory: dist
+        run: "for f in * ; do sha256sum $f > $f.sha256 ; done"
+      - name: "Create release"
+        shell: bash
+        run: |
+          # Re-running the workflow updates the existing release in place
+          if ! gh release view "$TAG_NAME" > /dev/null 2>&1 ; then
+            gh release create "$TAG_NAME" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG_NAME" \
+              --generate-notes \
+              $PRERELEASE
+          fi
+          gh release upload --clobber "$TAG_NAME" dist/*

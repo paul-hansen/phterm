@@ -20,7 +20,7 @@ $ make servedocs                  # build & live-serve docs (mkdocs via ci/build
 - Formatting requires **nightly** rustfmt (`.rustfmt.toml` uses `imports_granularity = "Module"`). Lua examples use stylua (`ci/stylua.toml`).
 - `cargo test --all` also works if nextest isn't installed.
 - Run the GUI in debug: `cargo run --bin wezterm-gui`. Use `wezterm-gui start --always-new-process` so mux logs aren't swallowed by an earlier background instance, and `--config-file ./test-conf.lua` to test a specific config.
-- `.github/workflows/gen_*.yml` are **generated** by `ci/generate-workflows.py` — edit the script and regenerate, don't hand-edit them.
+- CI is a single `.github/workflows/release.yml`: pushing a `20*` tag (`ci/tag.sh && git push --tags`) or running it manually builds Linux/macOS/Windows packages via `ci/deploy.sh` and publishes a GitHub release on this fork.
 - `ci/update-derived-files.sh` regenerates shell completions and doc examples from the built `target/debug/wezterm`; rerun it after changing CLI args or default key tables.
 
 ## Architecture

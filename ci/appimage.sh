@@ -22,11 +22,14 @@ distver=$(lsb_release -rs 2>/dev/null || sh -c "source /etc/os-release && echo \
 
 # Embed appropriate update info
 # https://github.com/AppImage/AppImageSpec/blob/master/draft.md#github-releases
+GH_REPO_PATH=${GITHUB_REPOSITORY:-wez/wezterm}
+GH_OWNER=${GH_REPO_PATH%%/*}
+GH_REPO_NAME=${GH_REPO_PATH#*/}
 if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-  UPDATE="gh-releases-zsync|wez|wezterm|nightly|WezTerm-*.AppImage.zsync"
+  UPDATE="gh-releases-zsync|$GH_OWNER|$GH_REPO_NAME|nightly|WezTerm-*.AppImage.zsync"
   OUTPUT=WezTerm-nightly-$distro$distver.AppImage
 else
-  UPDATE="gh-releases-zsync|wez|wezterm|latest|WezTerm-*.AppImage.zsync"
+  UPDATE="gh-releases-zsync|$GH_OWNER|$GH_REPO_NAME|latest|WezTerm-*.AppImage.zsync"
   OUTPUT=WezTerm-$TAG_NAME-$distro$distver.AppImage
 fi
 
