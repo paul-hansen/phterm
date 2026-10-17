@@ -311,6 +311,40 @@ impl crate::TermWindow {
             pos.pane
                 .apply_hyperlinks(stable_range.clone(), &self.config.hyperlink_rules);
 
+            // Snapshot the lines rather than rendering them inside
+            // with_lines_mut: for a local pane that holds the terminal lock,
+            // and shaping and rasterizing new glyphs can take long enough to
+            // stall the parser thread, which needs that lock to apply output.
+            // The shape hash is computed here so that it's cached on the
+            // real line (in its appdata), which the copy then carries.
+            struct LineSnapshot<'a> {
+                term_window: &'a mut crate::TermWindow,
+                first: StableRowIndex,
+                lines: Vec<Line>,
+            }
+
+            impl<'a> WithPaneLines for LineSnapshot<'a> {
+                fn with_lines_mut(&mut self, first: StableRowIndex, lines: &mut [&mut Line]) {
+                    self.first = first;
+                    for line in lines.iter() {
+                        self.term_window.shape_hash_for_line(line);
+                        self.lines.push((**line).clone());
+                    }
+                }
+            }
+
+            let mut snapshot = LineSnapshot {
+                term_window: self,
+                first: stable_range.start,
+                lines: vec![],
+            };
+            pos.pane.with_lines_mut(stable_range.clone(), &mut snapshot);
+            let LineSnapshot {
+                first: snapshot_first,
+                lines: mut snapshot_lines,
+                ..
+            } = snapshot;
+
             struct LineRender<'a, 'b> {
                 term_window: &'a mut crate::TermWindow,
                 selrange: Option<SelectionRange>,
@@ -565,7 +599,8 @@ impl crate::TermWindow {
                 }
             }
 
-            pos.pane.with_lines_mut(stable_range.clone(), &mut render);
+            let mut line_refs: Vec<&mut Line> = snapshot_lines.iter_mut().collect();
+            render.with_lines_mut(snapshot_first, &mut line_refs);
             if let Some(error) = render.error.take() {
                 return Err(error).context("error while calling with_lines_mut");
             }

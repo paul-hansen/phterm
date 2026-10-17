@@ -38,6 +38,10 @@ As features stabilize some brief notes about them will accumulate here.
       the window title) every time the cursor moves. The input method's
       reply to each cursor position update was treated as a composition
       change.
+* Rendering no longer holds up processing of program output. The window
+  used to shape and rasterize text while holding the terminal lock, so a
+  slow frame (lots of new glyphs, a large window) stalled the pty reader.
+  In vtebench, Unicode-heavy output got ~20x faster and dense output ~2x.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.
