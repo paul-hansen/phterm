@@ -28,9 +28,9 @@ and your existing `~/.wezterm.lua` works unchanged.
   bumps the mux protocol version, so this build can't connect to an upstream
   `wezterm-mux-server` (SSH/unix/TLS domains), or the other way round. Install the
   fork on the remote host too.
-- **No update notifications.** wezterm's built-in update checker looks at upstream
-  releases, not this fork's. To hear about new versions, watch this repo on GitHub
-  (Watch → Custom → Releases).
+- **Update notifications come from this fork.** The built-in update checker looks at
+  this repo's releases instead of upstream's, and links to the release notes here.
+  Builds older than this change still check upstream, so update manually once.
 - **Unsigned builds.** The macOS and Windows builds aren't code signed; see the
   install steps below for getting past the OS warnings.
 - **Upstream changes are pulled in periodically** by rebasing these changes onto

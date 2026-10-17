@@ -7,8 +7,9 @@ name: release
 # by running the workflow manually from the Actions tab, which tags the
 # selected commit for you.
 #
-# Tags must start with a digit (the default `ci/tag-name.sh` scheme is
-# `YYYYMMDD-HHMMSS-<hash>`) because the tag is used as the .deb version.
+# Tags must use the `ci/tag-name.sh` scheme, `YYYYMMDD-HHMMSS-<hash>`: the
+# tag is used as the .deb version, and the GUI's update checker compares it
+# as a string against the build's version, which uses the same scheme.
 
 on:
   push:
@@ -55,8 +56,8 @@ jobs:
           else
             tag=$(ci/tag-name.sh)
           fi
-          if [[ ! "$tag" =~ ^[0-9] ]]; then
-            echo "::error::Tag '$tag' must start with a digit (it is used as the package version)"
+          if [[ ! "$tag" =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]+$ ]]; then
+            echo "::error::Tag '$tag' must look like YYYYMMDD-HHMMSS-<hash> (see ci/tag-name.sh)"
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
