@@ -158,6 +158,11 @@ As features stabilize some brief notes about them will accumulate here.
   search matching. Thanks to @mrdziuban! #7385
 * The line editor used by prompt overlays and the debug overlay now supports
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
+* Kitty graphics protocol: support for
+  [Unicode placeholders](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders),
+  which allow images to be displayed by programs that don't understand the
+  graphics protocol themselves, such as tmux and vim, for example with
+  `kitten icat --unicode-placeholder`.
 
 #### Fixed
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the

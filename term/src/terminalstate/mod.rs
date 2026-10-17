@@ -30,6 +30,7 @@ mod image;
 mod iterm;
 mod keyboard;
 mod kitty;
+mod kitty_placeholder;
 mod mouse;
 pub(crate) mod performer;
 mod sixel;
@@ -1006,6 +1007,9 @@ impl TerminalState {
         self.pixel_width = size.pixel_width;
         self.dpi = size.dpi;
         self.tabs.resize(size.cols);
+        // The cell size may have changed, and lines may have been rewrapped
+        self.kitty_placeholders_invalidate();
+        self.kitty_update_placeholders();
 
         if self.screen.alt_screen_is_active {
             self.set_cursor_pos(

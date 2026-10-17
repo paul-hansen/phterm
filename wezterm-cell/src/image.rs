@@ -20,6 +20,12 @@ use std::time::Duration;
 #[cfg(feature = "std")]
 use wezterm_blob_leases::{BlobLease, BlobManager};
 
+/// The kitty graphics protocol Unicode placeholder character.
+/// Cells containing it display a slice of an image that has a
+/// virtual placement, instead of a glyph.
+/// <https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders>
+pub const UNICODE_PLACEHOLDER: char = '\u{10EEEE}';
+
 #[cfg(feature = "use_serde")]
 fn deserialize_notnan<'de, D>(deserializer: D) -> Result<NotNan<f32>, D::Error>
 where
@@ -112,6 +118,10 @@ pub struct ImageCell {
     /// For the kitty protocol: the placement id for this cell.
     /// Must be in sync with the attached image id/data.
     placement_id: Option<u32>,
+    /// For the kitty protocol: true if this slice is displayed because
+    /// the cell holds a Unicode placeholder for a virtual placement,
+    /// rather than because a placement was made at this position.
+    unicode_placeholder: bool,
 }
 
 impl ImageCell {
@@ -163,11 +173,26 @@ impl ImageCell {
             padding_bottom,
             image_id,
             placement_id,
+            unicode_placeholder: false,
         }
     }
 
+    /// Marks this slice as being displayed for a Unicode placeholder cell
+    pub fn with_unicode_placeholder(mut self) -> Self {
+        self.unicode_placeholder = true;
+        self
+    }
+
+    pub fn is_unicode_placeholder(&self) -> bool {
+        self.unicode_placeholder
+    }
+
+    /// Returns true if this slice belongs to the given (non-virtual) placement.
+    /// Slices displayed for Unicode placeholders never match.
     pub fn matches_placement(&self, image_id: u32, placement_id: Option<u32>) -> bool {
-        self.image_id == Some(image_id) && self.placement_id == placement_id
+        !self.unicode_placeholder
+            && self.image_id == Some(image_id)
+            && self.placement_id == placement_id
     }
 
     pub fn has_placement_id(&self) -> bool {

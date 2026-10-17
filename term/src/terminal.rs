@@ -170,6 +170,7 @@ impl Terminal {
 
             self.parser.parse(bytes, |action| performer.perform(action));
         }
+        self.state.kitty_update_placeholders();
         self.trigger_unseen_output_notif();
     }
 
@@ -181,6 +182,7 @@ impl Terminal {
                 performer.perform(action);
             }
         }
+        self.state.kitty_update_placeholders();
         self.trigger_unseen_output_notif();
     }
 }
