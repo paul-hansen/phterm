@@ -27,6 +27,26 @@ use wezterm_escape_parser::osc::{
 use wezterm_escape_parser::{
     Action, ControlCode, DeviceControlMode, Esc, EscCode, OperatingSystemCommand, CSI,
 };
+use wezterm_surface::SequenceNo;
+
+fn is_printable_ascii(b: u8) -> bool {
+    (0x20..0x7f).contains(&b)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lets tests compare the ASCII run fast path against the general one
+    pub(crate) static DISABLE_ASCII_FAST_PATH: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+fn ascii_fast_path_enabled() -> bool {
+    #[cfg(test)]
+    if DISABLE_ASCII_FAST_PATH.with(|d| d.get()) {
+        return false;
+    }
+    true
+}
 
 /// A helper struct for implementing `vtparse::VTActor` while compartmentalizing
 /// the terminal state and the embedding/host terminal interface
@@ -131,108 +151,205 @@ impl<'a> Performer<'a> {
             p.as_str()
         };
 
-        for g in Graphemes::new(text) {
-            let g = self.remap_grapheme(g);
+        // Runs of graphemes that are each a single printable ASCII byte are
+        // assigned in bulk, unless something would remap or shift them.
+        // Grapheme boundaries still come from the segmenter, as an ASCII
+        // byte can combine with a neighboring non-ASCII character.
+        let charset = if self.shift_out {
+            self.g1_charset
+        } else {
+            self.g0_charset
+        };
+        let ascii_fast_path =
+            !self.insert && charset == CharSet::Ascii && ascii_fast_path_enabled();
+        let bytes = text.as_bytes();
+        let mut ascii_run = 0..0;
+        let mut offset = 0;
+        let mut graphemes = Graphemes::new(text);
 
-            let mut print_width = grapheme_column_width(g, Some(&self.unicode_version));
-            if print_width == 0 {
-                // We got a zero-width grapheme.
-
-                // Relevant reading:
-                // <https://github.com/wezterm/wezterm/issues/1422>
-                // <https://github.com/wezterm/wezterm/issues/6637>
-                // <https://github.com/harfbuzz/harfbuzz/issues/4279>
-                // <https://www.unicode.org/faq/unsup_char.html#2>
-                //
-                // For White_Space we want to ensure that we display as a space.
-                // Other non-printing, zero-width characters can be elided
-                // to avoid presentation problems, but may introduce potential
-                // weirdness elsewhere. For example, U+2068 is a BIDI control
-                // character and will be elided by this logic. A consequence
-                // of that is that when the user copies the surrounding text
-                // from the terminal, that BIDI control will not be present.
-                // We do not currently have a solution for that.
-                if is_white_space_grapheme(g) {
-                    // Ensure that White_Space shows as a space
-                    print_width = 1;
+        while let Some(g) = graphemes.next() {
+            let start = offset;
+            offset += g.len();
+            if ascii_fast_path && g.len() == 1 && is_printable_ascii(g.as_bytes()[0]) {
+                if ascii_run.is_empty() {
+                    ascii_run = start..offset;
                 } else {
-                    log::trace!("Eliding zero-width grapheme {:?}", g);
-                    continue;
+                    ascii_run.end = offset;
                 }
-            }
 
-            if self.wrap_next {
-                // Since we're implicitly moving the cursor to the next
-                // line, we need to tag the current position as wrapped
-                // so that we can correctly reflow it if the window is
-                // resized.
+                // There's always a grapheme boundary between two printable
+                // ASCII characters, as none of them extend, join or prepend.
+                // So skip segmenting inside the run, other than its last
+                // byte which may yet be extended by what follows it.
+                let mut end = offset;
+                while end + 1 < bytes.len()
+                    && is_printable_ascii(bytes[end])
+                    && is_printable_ascii(bytes[end + 1])
                 {
-                    let y = self.cursor.y;
-                    let is_conpty = self.state.enable_conpty_quirks;
-                    let screen = self.screen_mut();
-                    let y = screen.phys_row(y);
-
-                    fn makes_sense_to_wrap(s: &str) -> bool {
-                        let len = s.len();
-                        match (len, s.chars().next()) {
-                            (1, Some(c)) => c.is_alphanumeric() || c.is_ascii_punctuation(),
-                            _ => true,
-                        }
-                    }
-
-                    let should_mark_wrapped = !is_conpty
-                        || screen
-                            .line_mut(y)
-                            .visible_cells()
-                            .last()
-                            .map(|cell| makes_sense_to_wrap(cell.str()))
-                            .unwrap_or(false);
-                    if should_mark_wrapped {
-                        screen.line_mut(y).set_last_cell_was_wrapped(true, seqno);
-                    }
+                    end += 1;
                 }
-                self.new_line(true);
-            }
-
-            let x = self.cursor.x;
-            let y = self.cursor.y;
-            let width = self.left_and_right_margins.end;
-
-            let pen = self.pen.clone();
-
-            let wrappable = x + print_width >= width;
-
-            if self.insert {
-                let margin = self.left_and_right_margins.end;
-                let screen = self.screen_mut();
-                for _ in x..x + print_width as usize {
-                    screen.insert_cell(x, y, margin, seqno);
+                if end > offset {
+                    ascii_run.end = end;
+                    offset = end;
+                    // Restarting here is safe as it follows an ASCII
+                    // character, which no segmentation rule looks behind
+                    graphemes = Graphemes::new(&text[offset..]);
                 }
+                continue;
             }
-
-            // Assign the cell
-            log::trace!(
-                "print x={} y={} print_width={} width={} cell={} {:?}",
-                x,
-                y,
-                print_width,
-                width,
-                g,
-                self.pen
-            );
-            self.screen_mut()
-                .set_cell_grapheme(x, y, g, print_width, pen, seqno);
-
-            if !wrappable {
-                self.cursor.x += print_width;
-                self.wrap_next = false;
-            } else {
-                self.wrap_next = self.dec_auto_wrap;
+            if !ascii_run.is_empty() {
+                self.print_ascii_run(&text.as_bytes()[ascii_run.clone()], seqno);
+                ascii_run = 0..0;
             }
+            self.print_grapheme(g, seqno);
+        }
+        if !ascii_run.is_empty() {
+            self.print_ascii_run(&text.as_bytes()[ascii_run], seqno);
         }
 
         std::mem::swap(&mut self.print, &mut p);
         self.print.clear();
+    }
+
+    /// Handles a pending auto-wrap before printing at the cursor
+    fn wrap_before_print(&mut self, seqno: SequenceNo) {
+        if self.wrap_next {
+            // Since we're implicitly moving the cursor to the next
+            // line, we need to tag the current position as wrapped
+            // so that we can correctly reflow it if the window is
+            // resized.
+            {
+                let y = self.cursor.y;
+                let is_conpty = self.state.enable_conpty_quirks;
+                let screen = self.screen_mut();
+                let y = screen.phys_row(y);
+
+                fn makes_sense_to_wrap(s: &str) -> bool {
+                    let len = s.len();
+                    match (len, s.chars().next()) {
+                        (1, Some(c)) => c.is_alphanumeric() || c.is_ascii_punctuation(),
+                        _ => true,
+                    }
+                }
+
+                let should_mark_wrapped = !is_conpty
+                    || screen
+                        .line_mut(y)
+                        .visible_cells()
+                        .last()
+                        .map(|cell| makes_sense_to_wrap(cell.str()))
+                        .unwrap_or(false);
+                if should_mark_wrapped {
+                    screen.line_mut(y).set_last_cell_was_wrapped(true, seqno);
+                }
+            }
+            self.new_line(true);
+        }
+    }
+
+    /// Prints a run of printable ASCII bytes, each of which is a grapheme
+    /// of width 1, with the same effect as print_grapheme for each byte.
+    fn print_ascii_run(&mut self, mut run: &[u8], seqno: SequenceNo) {
+        while !run.is_empty() {
+            self.wrap_before_print(seqno);
+
+            let x = self.cursor.x;
+            let y = self.cursor.y;
+            let width = self.left_and_right_margins.end;
+            if x >= width {
+                // Beyond the right margin; leave that to the general case
+                // unsafety: printable ASCII is valid utf8
+                let g = unsafe { std::str::from_utf8_unchecked(&run[..1]) };
+                self.print_grapheme(g, seqno);
+                run = &run[1..];
+                continue;
+            }
+
+            // Fill up to the right margin. Every cell but the last advances
+            // the cursor; the last one may set up a pending wrap instead.
+            let n = run.len().min(width - x);
+            log::trace!("print_ascii_run x={x} y={y} n={n} width={width}");
+            let pen = self.pen.clone();
+            self.screen_mut()
+                .set_cells_printable_ascii(x, y, &run[..n], &pen, seqno);
+            if x + n < width {
+                self.cursor.x = x + n;
+                self.wrap_next = false;
+            } else {
+                self.cursor.x = width - 1;
+                self.wrap_next = self.dec_auto_wrap;
+            }
+            run = &run[n..];
+        }
+    }
+
+    fn print_grapheme(&mut self, g: &str, seqno: SequenceNo) {
+        let g = self.remap_grapheme(g);
+
+        let mut print_width = grapheme_column_width(g, Some(&self.unicode_version));
+        if print_width == 0 {
+            // We got a zero-width grapheme.
+
+            // Relevant reading:
+            // <https://github.com/wezterm/wezterm/issues/1422>
+            // <https://github.com/wezterm/wezterm/issues/6637>
+            // <https://github.com/harfbuzz/harfbuzz/issues/4279>
+            // <https://www.unicode.org/faq/unsup_char.html#2>
+            //
+            // For White_Space we want to ensure that we display as a space.
+            // Other non-printing, zero-width characters can be elided
+            // to avoid presentation problems, but may introduce potential
+            // weirdness elsewhere. For example, U+2068 is a BIDI control
+            // character and will be elided by this logic. A consequence
+            // of that is that when the user copies the surrounding text
+            // from the terminal, that BIDI control will not be present.
+            // We do not currently have a solution for that.
+            if is_white_space_grapheme(g) {
+                // Ensure that White_Space shows as a space
+                print_width = 1;
+            } else {
+                log::trace!("Eliding zero-width grapheme {:?}", g);
+                return;
+            }
+        }
+
+        self.wrap_before_print(seqno);
+
+        let x = self.cursor.x;
+        let y = self.cursor.y;
+        let width = self.left_and_right_margins.end;
+
+        let pen = self.pen.clone();
+
+        let wrappable = x + print_width >= width;
+
+        if self.insert {
+            let margin = self.left_and_right_margins.end;
+            let screen = self.screen_mut();
+            for _ in x..x + print_width as usize {
+                screen.insert_cell(x, y, margin, seqno);
+            }
+        }
+
+        // Assign the cell
+        log::trace!(
+            "print x={} y={} print_width={} width={} cell={} {:?}",
+            x,
+            y,
+            print_width,
+            width,
+            g,
+            self.pen
+        );
+        self.screen_mut()
+            .set_cell_grapheme(x, y, g, print_width, pen, seqno);
+
+        if !wrappable {
+            self.cursor.x += print_width;
+            self.wrap_next = false;
+        } else {
+            self.wrap_next = self.dec_auto_wrap;
+        }
     }
 
     /// ConPTY, at the time of writing, does something horrible to rewrite

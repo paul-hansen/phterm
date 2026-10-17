@@ -3,6 +3,7 @@
 use super::*;
 use crate::hyperlink::{Hyperlink, Rule};
 use crate::line::clusterline::ClusteredLine;
+use crate::line::storage::CellStorage;
 use crate::SEQ_ZERO;
 use alloc::sync::Arc;
 use k9::assert_equal as assert_eq;
@@ -611,4 +612,97 @@ Line {
 }
 "#
     );
+}
+
+/// Writes `text` at `idx` both a byte at a time via set_cell_grapheme and
+/// as a run via set_cells_printable_ascii, and asserts identical results,
+/// including which storage representation the line ends up using.
+fn assert_ascii_run_matches_per_cell(line: &Line, idx: usize, text: &str, attr: &CellAttributes) {
+    let mut per_cell = line.clone();
+    for (i, b) in text.bytes().enumerate() {
+        let s = [b];
+        let s = core::str::from_utf8(&s).unwrap();
+        per_cell.set_cell_grapheme(idx + i, s, 1, attr.clone(), 2);
+    }
+
+    let mut batched = line.clone();
+    batched.set_cells_printable_ascii(idx, text.as_bytes(), attr, 2);
+
+    assert_eq!(batched.as_str(), per_cell.as_str(), "{text:?} at {idx}");
+    assert_eq!(batched, per_cell, "{text:?} at {idx}");
+}
+
+fn clustered(text: &str) -> Line {
+    let mut line: Line = text.into();
+    line.compress_for_scrollback();
+    assert!(matches!(line.cells, CellStorage::C(_)));
+    line
+}
+
+#[test]
+fn ascii_run_appends_to_empty_line() {
+    let blank = CellAttributes::blank();
+    let bold = CellAttributes::default()
+        .set_intensity(wezterm_cell::Intensity::Bold)
+        .clone();
+    for line in [Line::new(1), clustered("")] {
+        assert_ascii_run_matches_per_cell(&line, 0, "hello", &blank);
+        // Blank spaces past the end are left implicit, so the line stays short
+        assert_ascii_run_matches_per_cell(&line, 5, "  hi  ", &blank);
+        assert_ascii_run_matches_per_cell(&line, 3, "   ", &blank);
+        // ...but not if they carry attributes
+        assert_ascii_run_matches_per_cell(&line, 5, "  hi  ", &bold);
+    }
+}
+
+#[test]
+fn ascii_run_overwrites_existing_cells() {
+    let bold = CellAttributes::default()
+        .set_intensity(wezterm_cell::Intensity::Bold)
+        .clone();
+    let vec_line: Line = "hello world".into();
+    let cluster_line = clustered("hello world");
+    for line in [&vec_line, &cluster_line] {
+        assert_ascii_run_matches_per_cell(line, 0, "HELLO", &bold);
+        assert_ascii_run_matches_per_cell(line, 3, "XY", &bold);
+        // Starts inside the line and extends past its end
+        assert_ascii_run_matches_per_cell(line, 8, "12345", &bold);
+        // Appends exactly at the end
+        assert_ascii_run_matches_per_cell(line, 11, "!!", &bold);
+        // Leaves a gap after the end
+        assert_ascii_run_matches_per_cell(line, 14, "far", &bold);
+    }
+}
+
+#[test]
+fn ascii_run_next_to_double_width_cells() {
+    let attr = CellAttributes::default();
+    // 'a', '中' + its spacer, 'b'
+    let vec_line: Line = "a中b".into();
+    let cluster_line = clustered("a中b");
+    for line in [&vec_line, &cluster_line] {
+        // Starting on the spacer nerfs the double-width cell before it
+        assert_ascii_run_matches_per_cell(line, 2, "Z", &attr);
+        assert_ascii_run_matches_per_cell(line, 2, "ZZZ", &attr);
+        // Ending on the double-width cell itself
+        assert_ascii_run_matches_per_cell(line, 0, "xy", &attr);
+        // Covering both halves
+        assert_ascii_run_matches_per_cell(line, 1, "xy", &attr);
+    }
+}
+
+#[test]
+fn ascii_run_hyperlinks() {
+    let rules = vec![Rule::new(r"\b\w+://(?:[\w.-]+)\.[a-z]{2,15}\S*\b", "$0").unwrap()];
+    let mut implicit: Line = "see http://example.com here".into();
+    implicit.scan_and_create_hyperlinks(&rules);
+    assert!(implicit.has_hyperlink());
+    // Overwriting part of the line invalidates the implicit links
+    assert_ascii_run_matches_per_cell(&implicit, 0, "SEE", &CellAttributes::default());
+
+    let explicit = CellAttributes::default()
+        .set_hyperlink(Some(Arc::new(Hyperlink::new("https://wezterm.org"))))
+        .clone();
+    assert_ascii_run_matches_per_cell(&Line::new(1), 0, "link", &explicit);
+    assert_ascii_run_matches_per_cell(&"plain text".into(), 2, "link", &explicit);
 }

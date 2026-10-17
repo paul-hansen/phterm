@@ -680,6 +680,18 @@ impl TeenyString {
         Self::from_str(c.encode_utf8(&mut bytes), None, None)
     }
 
+    /// Equivalent to `from_str` for a single printable ASCII byte
+    /// (0x20..=0x7e), minus the de-fanging and width lookup.
+    pub fn from_printable_ascii(b: u8) -> Self {
+        debug_assert!((0x20..0x7f).contains(&b), "{b:#x} is not printable ASCII");
+        let word = if cfg!(target_endian = "little") {
+            b as u64
+        } else {
+            (b as u64) << 56
+        };
+        Self(Self::set_marker_bit(word, 1))
+    }
+
     pub fn width(&self) -> usize {
         if Self::is_marker_bit_set(self.0) {
             if Self::is_double_width(self.0) { 2 } else { 1 }
@@ -822,6 +834,15 @@ impl Cell {
 
         Self {
             text: storage,
+            attrs,
+        }
+    }
+
+    /// Create a cell holding a single printable ASCII byte (0x20..=0x7e).
+    /// A cheaper equivalent of `new_grapheme_with_width(text, 1, attrs)`.
+    pub fn new_printable_ascii(b: u8, attrs: CellAttributes) -> Self {
+        Self {
+            text: TeenyString::from_printable_ascii(b),
             attrs,
         }
     }
@@ -1030,6 +1051,26 @@ pub enum AttributeChange {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn printable_ascii_matches_from_str() {
+        let attrs = CellAttributes::default()
+            .set_intensity(Intensity::Bold)
+            .clone();
+        for b in 0x20..0x7fu8 {
+            let s = [b];
+            let s = core::str::from_utf8(&s).unwrap();
+            assert_eq!(
+                TeenyString::from_printable_ascii(b).0,
+                TeenyString::from_str(s, None, None).0,
+                "encoding of {s:?}"
+            );
+            let cell = Cell::new_printable_ascii(b, attrs.clone());
+            assert!(cell == Cell::new_grapheme_with_width(s, 1, attrs.clone()));
+            assert_eq!(cell.str(), s);
+            assert_eq!(cell.width(), 1);
+        }
+    }
 
     #[test]
     fn teeny_string() {

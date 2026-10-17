@@ -792,6 +792,72 @@ impl Line {
         self.set_cell(idx, Cell::new_grapheme_with_width(text, width, attr), seqno);
     }
 
+    /// Assign a run of printable ASCII bytes (0x20..=0x7e) starting at
+    /// `idx`, each becoming a single-width cell with `attr`.
+    /// This produces the same line as calling `set_cell_grapheme` for each
+    /// byte in turn, but does the per-cell bookkeeping once per run.
+    pub fn set_cells_printable_ascii(
+        &mut self,
+        idx: usize,
+        text: &[u8],
+        attr: &CellAttributes,
+        seqno: SequenceNo,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        if attr.hyperlink().is_some() {
+            self.bits |= LineBits::HAS_HYPERLINK;
+        }
+
+        if let CellStorage::C(cl) = &mut self.cells {
+            if idx >= cl.len() {
+                let mut appended = false;
+                for (i, &b) in text.iter().enumerate() {
+                    let pos = idx + i;
+                    if pos > cl.len() && b == b' ' && *attr == CellAttributes::blank() {
+                        // Already implicitly blank; see set_cell_grapheme
+                        continue;
+                    }
+                    while cl.len() < pos {
+                        cl.append_grapheme(" ", 1, CellAttributes::blank());
+                    }
+                    let b = [b];
+                    // unsafety: the caller guarantees ASCII, which is utf8
+                    let s = unsafe { core::str::from_utf8_unchecked(&b) };
+                    cl.append_grapheme(s, 1, attr.clone());
+                    appended = true;
+                }
+                if appended {
+                    self.invalidate_implicit_hyperlinks(seqno);
+                    self.invalidate_zones();
+                    self.update_last_change_seqno(seqno);
+                }
+                return;
+            }
+        }
+
+        self.invalidate_implicit_hyperlinks(seqno);
+        self.invalidate_zones();
+        self.update_last_change_seqno(seqno);
+
+        let end = idx + text.len();
+        {
+            let cells = self.coerce_vec_storage();
+            if end > cells.len() {
+                cells.resize_with(end, Cell::blank);
+            }
+        }
+        // Only the first cell can follow a double-width cell; the rest
+        // follow a cell from this run.
+        self.invalidate_grapheme_at_or_before(idx);
+
+        let cells = self.coerce_vec_storage();
+        for (i, &b) in text.iter().enumerate() {
+            cells.set_cell(idx + i, Cell::new_printable_ascii(b, attr.clone()), false);
+        }
+    }
+
     pub fn set_cell_clearing_image_placements(
         &mut self,
         idx: usize,

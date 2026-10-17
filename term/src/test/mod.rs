@@ -2,6 +2,7 @@
 //! processing routines.
 
 use super::*;
+mod ascii_fast_path;
 mod c0;
 use bitflags::bitflags;
 mod c1;
