@@ -15,9 +15,20 @@ Sponsor Wez at https://wezterm.org/sponsor.html
   part of the kitty graphics protocol (`U=1` virtual placements), so images are drawn by
   printing placeholder characters and move with the text. This is what makes images work
   in TUIs that use it, inside tmux, and with `kitten icat --unicode-placeholder`.
+- Lower typing latency. Typed characters reach the screen sooner: the window no longer
+  repaints before the shell has echoed a key (which made the echo wait for the next
+  frame), doesn't paint an extra frame every time the cursor moves on Wayland, and the
+  `max_fps` and `mux_output_parser_coalesce_delay_ms` defaults are tuned for latency.
+- Faster processing of program output: ~2-3x for text-heavy output and full-screen
+  programs such as vim, and ~20x for Unicode-heavy output, in
+  [vtebench](https://github.com/alacritty/vtebench).
+  Rendering no longer blocks the processing of output, plain ASCII text is written to
+  the screen in bulk, and full-screen programs such as vim no longer pay for scrollback
+  compression on the alternate screen.
 
-Everything else is upstream wezterm, so the [upstream docs](https://wezterm.org/) apply
-and your existing `~/.wezterm.lua` works unchanged.
+See the [changelog](docs/changelog.md) for details. Everything else is upstream
+wezterm, so the [upstream docs](https://wezterm.org/) apply and your existing
+`~/.wezterm.lua` works unchanged.
 
 ## Things to know before switching
 
@@ -28,6 +39,10 @@ and your existing `~/.wezterm.lua` works unchanged.
   bumps the mux protocol version, so this build can't connect to an upstream
   `wezterm-mux-server` (SSH/unix/TLS domains), or the other way round. Install the
   fork on the remote host too.
+- **Two defaults differ from upstream.** `max_fps` defaults to `165` (upstream: `60`)
+  and `mux_output_parser_coalesce_delay_ms` to `0` (upstream: `3`), to cut typing
+  latency. Set them in your config to get upstream's behavior back, e.g. if a
+  full-screen program that doesn't use synchronized output shows half-drawn screens.
 - **Update notifications come from this fork.** The built-in update checker looks at
   this repo's releases instead of upstream's, and links to the release notes here.
   Builds older than this change still check upstream, so update manually once.
