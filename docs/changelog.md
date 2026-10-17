@@ -50,6 +50,8 @@ As features stabilize some brief notes about them will accumulate here.
       scrollback were compressed for a scrollback that doesn't exist.
     * Output with a non-default background color scrolls ~1.7x faster once
       the scrollback is full.
+    * Erasing within lines fills the cells in bulk rather than one at a
+      time.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

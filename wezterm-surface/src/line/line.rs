@@ -1078,11 +1078,60 @@ impl Line {
             // them all away again before we return; NOP
             return;
         }
-        for x in cols {
-            // FIXME: we can skip the look-back for second and subsequent iterations
-            self.set_cell_impl(x, cell.clone(), true, seqno);
+        if cell.width() == 1 && !cols.is_empty() {
+            self.fill_range_single_width(cols, cell, seqno);
+        } else {
+            for x in cols {
+                self.set_cell_impl(x, cell.clone(), true, seqno);
+            }
         }
         self.prune_trailing_blanks(seqno);
+    }
+
+    /// The same as calling set_cell_impl(x, cell.clone(), true, seqno) for
+    /// each x in the non-empty `cols`, but with the per-cell bookkeeping
+    /// and the look-back for an overlapped double-width cell done once.
+    fn fill_range_single_width(&mut self, cols: Range<usize>, cell: &Cell, seqno: SequenceNo) {
+        self.invalidate_implicit_hyperlinks(seqno);
+        self.invalidate_zones();
+        self.update_last_change_seqno(seqno);
+        if cell.attrs().hyperlink().is_some() {
+            self.bits |= LineBits::HAS_HYPERLINK;
+        }
+
+        let mut start = cols.start;
+        if let CellStorage::C(cl) = &mut self.cells {
+            // While at or beyond the end, set_cell_impl appends, or skips
+            // blanks that would be implicit anyway
+            let is_blank = *cell == Cell::blank();
+            while start < cols.end && start >= cl.len() {
+                if !(start > cl.len() && is_blank) {
+                    while cl.len() < start {
+                        cl.append_grapheme(" ", 1, CellAttributes::blank());
+                    }
+                    cl.append(cell.clone());
+                }
+                start += 1;
+            }
+            if start == cols.end {
+                return;
+            }
+        }
+
+        {
+            let cells = self.coerce_vec_storage();
+            if cols.end > cells.len() {
+                cells.resize_with(cols.end, Cell::blank);
+            }
+        }
+        // Only the first cell can follow a double-width cell; the rest
+        // follow a cell that was just filled.
+        self.invalidate_grapheme_at_or_before(start);
+
+        let cells = self.coerce_vec_storage();
+        for x in start..cols.end {
+            cells.set_cell(x, cell.clone(), true);
+        }
     }
 
     pub fn len(&self) -> usize {

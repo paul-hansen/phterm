@@ -4,7 +4,7 @@ use super::*;
 use crate::hyperlink::{Hyperlink, Rule};
 use crate::line::clusterline::ClusteredLine;
 use crate::line::storage::CellStorage;
-use crate::SEQ_ZERO;
+use crate::{SequenceNo, SEQ_ZERO};
 use alloc::sync::Arc;
 use k9::assert_equal as assert_eq;
 use wezterm_cell::{Cell, CellAttributes};
@@ -722,5 +722,71 @@ fn resize_and_clear_matches_for_both_storages() {
         assert!(cluster_line
             .visible_cells()
             .all(|c| c.str() == " " && *c.attrs() == attr));
+    }
+}
+
+/// fill_range as it was implemented before it was batched
+fn fill_range_per_cell(
+    line: &mut Line,
+    cols: core::ops::Range<usize>,
+    cell: &Cell,
+    seqno: SequenceNo,
+) {
+    if line.len() == 0 && *cell == Cell::blank() {
+        return;
+    }
+    for x in cols {
+        line.set_cell_clearing_image_placements(x, cell.clone(), seqno);
+    }
+    line.prune_trailing_blanks(seqno);
+}
+
+fn assert_fill_range_matches_per_cell(line: &Line, cols: core::ops::Range<usize>, cell: &Cell) {
+    let mut per_cell = line.clone();
+    fill_range_per_cell(&mut per_cell, cols.clone(), cell, 2);
+    let mut batched = line.clone();
+    batched.fill_range(cols.clone(), cell, 2);
+    assert_eq!(
+        batched.as_str(),
+        per_cell.as_str(),
+        "{cols:?} with {cell:?}"
+    );
+    assert_eq!(batched, per_cell, "{cols:?} with {cell:?}");
+}
+
+#[test]
+fn fill_range_matches_per_cell() {
+    let blank = Cell::blank();
+    let colored = Cell::blank_with_attrs(
+        CellAttributes::default()
+            .set_background(wezterm_cell::color::ColorAttribute::PaletteIndex(4))
+            .clone(),
+    );
+    let linked = Cell::new(
+        'x',
+        CellAttributes::default()
+            .set_hyperlink(Some(Arc::new(Hyperlink::new("https://wezterm.org"))))
+            .clone(),
+    );
+    let wide = Cell::new_grapheme("中", CellAttributes::default(), None);
+
+    let mut implicit: Line = "see http://example.com here".into();
+    implicit.scan_and_create_hyperlinks(&[Rule::new(r"\b\w+://\S+", "$0").unwrap()]);
+
+    let lines = [
+        Line::new(1),
+        clustered(""),
+        "hello world".into(),
+        clustered("hello world"),
+        "a中b中".into(),
+        clustered("a中b中"),
+        implicit,
+    ];
+    for line in &lines {
+        for cell in [&blank, &colored, &linked, &wide] {
+            for cols in [0..0, 0..3, 2..5, 3..11, 5..20, 11..15, 13..16, 2..3, 1..2] {
+                assert_fill_range_matches_per_cell(line, cols, cell);
+            }
+        }
     }
 }
