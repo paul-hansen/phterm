@@ -34,6 +34,10 @@ As features stabilize some brief notes about them will accumulate here.
       wait for the next one (up to a full refresh on Wayland, `1/max_fps` on
       X11). Keypress-to-frame latency dropped to ~0.3ms on Wayland and
       ~1.5ms on X11.
+    * Wayland: no longer paints a redundant extra frame (and re-evaluates
+      the window title) every time the cursor moves. The input method's
+      reply to each cursor position update was treated as a composition
+      change.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

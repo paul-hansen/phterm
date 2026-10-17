@@ -1002,11 +1002,16 @@ impl TermWindow {
                 } else {
                     log::trace!("DeadKeyStatus now: {:?}", status);
                 }
-                self.dead_key_status = status;
-                self.update_title();
-                // Ensure that we repaint so that any composing
-                // text is updated
-                window.invalidate();
+                // Platforms re-advise an unchanged status often; on Wayland
+                // every text-input `done` (sent in reply to the cursor
+                // rectangle we set after each paint) advises None, which
+                // would otherwise cost an extra frame per cursor movement.
+                if keyevent::update_dead_key_status(&mut self.dead_key_status, status) {
+                    self.update_title();
+                    // Ensure that we repaint so that any composing
+                    // text is updated
+                    window.invalidate();
+                }
                 Ok(true)
             }
             WindowEvent::NeedRepaint => {

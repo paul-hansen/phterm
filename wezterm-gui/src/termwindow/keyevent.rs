@@ -198,6 +198,16 @@ fn key_input_needs_repaint(pane_renders_via_output: bool, gui_state_changed: boo
     gui_state_changed || !pane_renders_via_output
 }
 
+/// Stores a newly advised dead key/composition status. Returns true if it
+/// changed, and so the composing text shown in the window needs a repaint.
+pub fn update_dead_key_status(current: &mut DeadKeyStatus, status: DeadKeyStatus) -> bool {
+    if *current == status {
+        return false;
+    }
+    *current = status;
+    true
+}
+
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum OnlyKeyBindings {
     Yes,
@@ -931,6 +941,40 @@ mod test {
         // eg: copy mode search editing or the client pane's predictive echo
         assert!(key_input_needs_repaint(false, false));
         assert!(key_input_needs_repaint(false, true));
+    }
+
+    #[test]
+    fn unchanged_dead_key_status_does_not_repaint() {
+        // Wayland advises None after every text-input `done`
+        let mut status = DeadKeyStatus::None;
+        assert!(!update_dead_key_status(&mut status, DeadKeyStatus::None));
+
+        let mut status = DeadKeyStatus::Composing("e".to_string());
+        assert!(!update_dead_key_status(
+            &mut status,
+            DeadKeyStatus::Composing("e".to_string())
+        ));
+    }
+
+    #[test]
+    fn changed_dead_key_status_repaints() {
+        let mut status = DeadKeyStatus::None;
+        assert!(update_dead_key_status(
+            &mut status,
+            DeadKeyStatus::Composing("´".to_string())
+        ));
+        assert_eq!(status, DeadKeyStatus::Composing("´".to_string()));
+
+        // Composition text grows
+        assert!(update_dead_key_status(
+            &mut status,
+            DeadKeyStatus::Composing("にほ".to_string())
+        ));
+        assert_eq!(status, DeadKeyStatus::Composing("にほ".to_string()));
+
+        // Composition ends: the placeholder must be erased
+        assert!(update_dead_key_status(&mut status, DeadKeyStatus::None));
+        assert_eq!(status, DeadKeyStatus::None);
     }
 
     #[test]
