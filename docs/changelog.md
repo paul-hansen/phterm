@@ -29,6 +29,11 @@ As features stabilize some brief notes about them will accumulate here.
       [mux_output_parser_coalesce_delay_ms](config/lua/config/mux_output_parser_coalesce_delay_ms.md)
       now defaults to `0` (was `3`). On X11 this cut keypress-to-frame
       latency from ~18ms to ~5ms.
+    * Typing no longer repaints the window before the shell has echoed the
+      key. That redundant frame used up the frame slot, so the echo had to
+      wait for the next one (up to a full refresh on Wayland, `1/max_fps` on
+      X11). Keypress-to-frame latency dropped to ~0.3ms on Wayland and
+      ~1.5ms on X11.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

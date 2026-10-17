@@ -414,6 +414,12 @@ impl Pane for LocalPane {
         self.terminal.lock().key_up(key, mods)
     }
 
+    fn key_input_renders_via_output(&self) -> bool {
+        // Keys are only encoded and written to the pty; any echo is
+        // parsed by parse_buffered_data, which notifies PaneOutput.
+        true
+    }
+
     fn resize(&self, size: TerminalSize) -> Result<(), Error> {
         self.pty.lock().resize(PtySize {
             rows: size.rows.try_into()?,

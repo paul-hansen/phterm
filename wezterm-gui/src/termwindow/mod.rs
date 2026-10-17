@@ -108,6 +108,12 @@ pub fn get_window_class() -> String {
     WINDOW_CLASS.lock().unwrap().clone()
 }
 
+/// Snap a pane's viewport back to the bottom in response to input, if
+/// enabled. Returns true if the viewport moved and so needs a repaint.
+fn scroll_to_bottom_for_input(viewport: &mut Option<StableRowIndex>, enabled: bool) -> bool {
+    enabled && viewport.take().is_some()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MouseCapture {
     UI,
@@ -3366,10 +3372,12 @@ impl TermWindow {
         self.window.as_ref().unwrap().invalidate();
     }
 
-    fn maybe_scroll_to_bottom_for_input(&mut self, pane: &Arc<dyn Pane>) {
-        if self.config.scroll_to_bottom_on_input {
-            self.scroll_to_bottom(pane);
-        }
+    /// Returns true if the viewport moved
+    fn maybe_scroll_to_bottom_for_input(&mut self, pane: &Arc<dyn Pane>) -> bool {
+        scroll_to_bottom_for_input(
+            &mut self.pane_state(pane.pane_id()).viewport,
+            self.config.scroll_to_bottom_on_input,
+        )
     }
 
     fn scroll_to_top(&mut self, pane: &Arc<dyn Pane>) {

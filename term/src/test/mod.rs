@@ -7,6 +7,7 @@ use bitflags::bitflags;
 mod c1;
 mod csi;
 mod image;
+mod keyboard;
 mod kitty_placeholder;
 // mod selection; FIXME: port to render layer
 use crate::color::ColorPalette;

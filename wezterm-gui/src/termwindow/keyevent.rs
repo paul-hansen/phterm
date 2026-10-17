@@ -79,7 +79,9 @@ impl KeyTableState {
         true
     }
 
-    pub fn pop_until_unknown(&mut self) {
+    /// Returns true if any entries were popped
+    pub fn pop_until_unknown(&mut self) -> bool {
+        let mut popped = false;
         while self
             .stack
             .last()
@@ -87,7 +89,9 @@ impl KeyTableState {
             .unwrap_or(false)
         {
             self.pop();
+            popped = true;
         }
+        popped
     }
 
     pub fn current_table(&mut self) -> Option<&str> {
@@ -162,7 +166,8 @@ impl KeyTableState {
         result
     }
 
-    pub fn did_process_key(&mut self) {
+    /// Returns true if a one-shot entry was popped
+    pub fn did_process_key(&mut self) -> bool {
         let should_pop = self
             .stack
             .last()
@@ -171,6 +176,7 @@ impl KeyTableState {
         if should_pop {
             self.pop();
         }
+        should_pop
     }
 }
 
@@ -179,6 +185,17 @@ pub enum Key {
     Code(::termwiz::input::KeyCode),
     Composed(String),
     None,
+}
+
+/// Whether a key that was just forwarded to a pane needs an immediate
+/// repaint. Repainting before the pane has responded renders an unchanged
+/// frame, and the echo then has to wait for the next frame slot (the next
+/// compositor frame callback on Wayland, 1/max_fps on X11) to be shown.
+/// Panes whose response arrives as output get repainted by the resulting
+/// PaneOutput notification, so they only need one here when GUI-side
+/// state such as the viewport or the key table stack changed.
+fn key_input_needs_repaint(pane_renders_via_output: bool, gui_state_changed: bool) -> bool {
+    gui_state_changed || !pane_renders_via_output
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -645,8 +662,11 @@ impl super::TermWindow {
         // If we get here, then none of the keys matched
         // any key table rules. Therefore, we should pop all `until_unknown`
         // entries from the stack.
+        // Tracks GUI-side state changed by this key, which, unlike the
+        // pane's response, won't trigger a repaint on its own.
+        let mut gui_state_changed = false;
         if window_key.key_is_down {
-            self.key_table_state.pop_until_unknown();
+            gui_state_changed |= self.key_table_state.pop_until_unknown();
         }
 
         let key = self.win_key_code_to_termwiz_key_code(&window_key.key);
@@ -661,7 +681,7 @@ impl super::TermWindow {
                         self.leader_done();
                         return;
                     }
-                    self.key_table_state.did_process_key();
+                    gui_state_changed |= self.key_table_state.did_process_key();
                 }
 
                 if let Some(modal) = self.get_modal() {
@@ -707,7 +727,7 @@ impl super::TermWindow {
                         && !key.is_modifier()
                         && self.pane_state(pane.pane_id()).overlay.is_none()
                     {
-                        self.maybe_scroll_to_bottom_for_input(&pane);
+                        gui_state_changed |= self.maybe_scroll_to_bottom_for_input(&pane);
                     }
                     if window_key.key_is_down
                         && self.config.hide_mouse_cursor_when_typing
@@ -715,7 +735,12 @@ impl super::TermWindow {
                     {
                         context.set_cursor(None);
                     }
-                    if !key.is_modifier() {
+                    if !key.is_modifier()
+                        && key_input_needs_repaint(
+                            pane.key_input_renders_via_output(),
+                            gui_state_changed,
+                        )
+                    {
                         context.invalidate();
                     }
                 }
@@ -731,15 +756,17 @@ impl super::TermWindow {
                     self.leader_done();
                     return;
                 }
-                self.key_table_state.did_process_key();
+                gui_state_changed |= self.key_table_state.did_process_key();
                 if self.config.debug_key_events {
                     log::info!("send to pane string={:?}", s);
                 }
                 if let Err(err) = pane.send_composed_text(&s) {
                     log::error!("failed to send composed text to pane: {err:#}");
                 }
-                self.maybe_scroll_to_bottom_for_input(&pane);
-                context.invalidate();
+                gui_state_changed |= self.maybe_scroll_to_bottom_for_input(&pane);
+                if key_input_needs_repaint(pane.key_input_renders_via_output(), gui_state_changed) {
+                    context.invalidate();
+                }
             }
             Key::None => {}
         }
@@ -867,5 +894,89 @@ impl super::TermWindow {
             WK::KeyPadPageDown => KC::KeyPadPageDown,
         };
         Key::Code(code)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::termwindow::scroll_to_bottom_for_input;
+
+    fn table(one_shot: bool, until_unknown: bool) -> KeyTableArgs<'static> {
+        KeyTableArgs {
+            name: "test",
+            timeout_milliseconds: None,
+            replace_current: false,
+            one_shot,
+            until_unknown,
+            prevent_fallback: false,
+        }
+    }
+
+    #[test]
+    fn local_pane_key_input_waits_for_output() {
+        // The echo's PaneOutput notification repaints; repainting here
+        // would only delay it.
+        assert!(!key_input_needs_repaint(true, false));
+    }
+
+    #[test]
+    fn local_pane_key_input_repaints_for_gui_changes() {
+        // eg: scrolled back to the bottom, or a key table popped
+        assert!(key_input_needs_repaint(true, true));
+    }
+
+    #[test]
+    fn synchronously_rendering_pane_always_repaints() {
+        // eg: copy mode search editing or the client pane's predictive echo
+        assert!(key_input_needs_repaint(false, false));
+        assert!(key_input_needs_repaint(false, true));
+    }
+
+    #[test]
+    fn scroll_to_bottom_reports_viewport_change() {
+        let mut viewport = Some(-10);
+        assert!(scroll_to_bottom_for_input(&mut viewport, true));
+        assert_eq!(viewport, None);
+
+        // Already at the bottom: nothing to repaint
+        assert!(!scroll_to_bottom_for_input(&mut viewport, true));
+        assert_eq!(viewport, None);
+    }
+
+    #[test]
+    fn scroll_to_bottom_disabled_keeps_viewport() {
+        let mut viewport = Some(-10);
+        assert!(!scroll_to_bottom_for_input(&mut viewport, false));
+        assert_eq!(viewport, Some(-10));
+    }
+
+    #[test]
+    fn did_process_key_reports_one_shot_pop() {
+        let mut state = KeyTableState::default();
+        assert!(!state.did_process_key());
+
+        state.activate(table(false, false));
+        assert!(!state.did_process_key());
+        assert_eq!(state.current_table(), Some("test"));
+
+        state.activate(table(true, false));
+        assert!(state.did_process_key());
+        assert_eq!(state.stack.len(), 1);
+    }
+
+    #[test]
+    fn pop_until_unknown_reports_pops() {
+        let mut state = KeyTableState::default();
+        assert!(!state.pop_until_unknown());
+
+        state.activate(table(false, false));
+        assert!(!state.pop_until_unknown());
+        assert_eq!(state.stack.len(), 1);
+
+        state.activate(table(false, true));
+        state.activate(table(false, true));
+        assert!(state.pop_until_unknown());
+        assert_eq!(state.stack.len(), 1);
     }
 }

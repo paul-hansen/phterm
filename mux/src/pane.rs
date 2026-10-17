@@ -253,6 +253,16 @@ pub trait Pane: Downcast + Send + Sync {
     fn set_zoomed(&self, _zoomed: bool) {}
     fn key_down(&self, key: KeyCode, mods: KeyModifiers) -> anyhow::Result<()>;
     fn key_up(&self, key: KeyCode, mods: KeyModifiers) -> anyhow::Result<()>;
+    /// Returns true if any visible effect of key_down, key_up or
+    /// send_composed_text only shows up later as pane output, which is
+    /// signalled via MuxNotification::PaneOutput. The GUI then skips
+    /// repainting right after forwarding a key; that repaint would render
+    /// an unchanged frame and hold the echo back until the next frame slot.
+    /// Panes that change their rendered state synchronously in response to
+    /// keys (overlays, the client pane's predictive echo) must return false.
+    fn key_input_renders_via_output(&self) -> bool {
+        false
+    }
     fn perform_assignment(&self, _assignment: &KeyAssignment) -> PerformAssignmentResult {
         PerformAssignmentResult::Unhandled
     }
@@ -671,6 +681,17 @@ mod test {
         fn key_up(&self, _: KeyCode, _: KeyModifiers) -> anyhow::Result<()> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn key_input_needs_repaint_by_default() {
+        // Overlays and the client pane's predictive echo change what they
+        // render synchronously in response to keys, so skipping the GUI
+        // repaint after key input must be opted in to.
+        let pane = FakePane {
+            lines: Mutex::new(vec![]),
+        };
+        assert!(!pane.key_input_renders_via_output());
     }
 
     fn physical_lines_from_text(text: &str, width: usize) -> Vec<Line> {
