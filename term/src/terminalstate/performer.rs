@@ -1023,7 +1023,9 @@ impl<'a> Performer<'a> {
             ) => {}
 
             OperatingSystemCommand::SystemNotification(message) => {
-                if let Some(handler) = self.alert_handler.as_mut() {
+                if message.is_empty() {
+                    log::debug!("ignoring empty OSC 9 notification");
+                } else if let Some(handler) = self.alert_handler.as_mut() {
                     handler.alert(Alert::ToastNotification {
                         title: None,
                         body: message,
@@ -1035,12 +1037,14 @@ impl<'a> Performer<'a> {
             }
             OperatingSystemCommand::RxvtExtension(params) => {
                 if let Some("notify") = params.get(0).map(String::as_str) {
-                    let title = params.get(1);
-                    let body = params.get(2);
-                    let (title, body) = match (title.cloned(), body.cloned()) {
-                        (Some(title), None) => (None, title),
-                        (Some(title), Some(body)) => (Some(title), body),
-                        _ => {
+                    // `777;notify;title;body`, where the body is everything
+                    // after the title, including any semicolons
+                    let title = params.get(1).filter(|title| !title.is_empty()).cloned();
+                    let body = params.get(2..).unwrap_or_default().join(";");
+                    let (title, body) = match (title, body.is_empty()) {
+                        (title, false) => (title, body),
+                        (Some(title), true) => (None, title),
+                        (None, true) => {
                             log::warn!("malformed rxvt notify escape: {:?}", params);
                             return;
                         }
@@ -1058,6 +1062,19 @@ impl<'a> Performer<'a> {
                 self.current_dir = Url::parse(&url).ok();
                 if let Some(handler) = self.alert_handler.as_mut() {
                     handler.alert(Alert::CurrentWorkingDirectoryChanged);
+                }
+            }
+            OperatingSystemCommand::ConEmuCurrentWorkingDirectory(path) => {
+                // Paths that aren't absolute on this platform, such as a
+                // Windows path sent through ssh, can't be represented
+                match Url::from_file_path(&path) {
+                    Ok(url) => {
+                        self.current_dir = Some(url);
+                        if let Some(handler) = self.alert_handler.as_mut() {
+                            handler.alert(Alert::CurrentWorkingDirectoryChanged);
+                        }
+                    }
+                    Err(()) => log::debug!("ignoring ConEmu working directory {path:?}"),
                 }
             }
             OperatingSystemCommand::ChangeColorNumber(specs) => {

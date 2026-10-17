@@ -29,7 +29,8 @@ Sponsor Wez at https://wezterm.org/sponsor.html
   one takes you to the pane, tab and window that sent it, and on Linux they expire after
   the system's default duration instead of staying on screen until dismissed. On
   Wayland, raising the window uses xdg-activation, which also makes `window:focus()`
-  work there.
+  work there. Messages containing `;` are shown in full instead of being dropped or
+  cut short.
 
 See the [changelog](docs/changelog.md) for details. Everything else is upstream
 wezterm, so the [upstream docs](https://wezterm.org/) apply and your existing

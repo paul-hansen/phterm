@@ -52,6 +52,8 @@ pub enum OperatingSystemCommand {
     ResetColors(Vec<u8>),
     RxvtExtension(Vec<String>),
     ConEmuProgress(Progress),
+    /// A file path rather than OSC 7's URL
+    ConEmuCurrentWorkingDirectory(String),
 
     Unspecified(Vec<Vec<u8>>),
 }
@@ -153,6 +155,11 @@ impl Display for Selection {
     }
 }
 
+/// Re-join OSC parameters that were split on `;`, replacing invalid UTF-8
+fn join_lossy(params: &[&[u8]]) -> String {
+    String::from_utf8_lossy(&params.join(&b';')).into_owned()
+}
+
 impl OperatingSystemCommand {
     pub fn parse(osc: &[&[u8]]) -> Self {
         Self::internal_parse(osc).unwrap_or_else(|err| {
@@ -182,6 +189,38 @@ impl OperatingSystemCommand {
         } else {
             bail!("unhandled OSC 52: {:?}", osc);
         }
+    }
+
+    /// `OSC 9 ; 4 ; state ; percentage ST`
+    fn parse_conemu_progress(osc: &[&[u8]]) -> Result<Self> {
+        fn get_pct(v: &&[u8]) -> u8 {
+            let number = str::from_utf8(v).unwrap_or("0");
+            number.parse::<u8>().unwrap_or(0).max(0).min(100)
+        }
+        let progress = match osc.get(2).copied() {
+            Some(b"0") => Progress::None,
+            Some(b"1") => Progress::SetPercentage(osc.get(3).map(get_pct).unwrap_or(0)),
+            Some(b"2") => Progress::SetError(osc.get(3).map(get_pct).unwrap_or(0)),
+            Some(b"3") => Progress::SetIndeterminate,
+            Some(b"4") => Progress::Paused,
+            _ => bail!("invalid ConEmu progress {:?}", osc),
+        };
+        Ok(OperatingSystemCommand::ConEmuProgress(progress))
+    }
+
+    /// `OSC 9 ; 9 ; "path" ST`, where the quotes are optional
+    fn parse_conemu_cwd(osc: &[&[u8]]) -> Result<Self> {
+        let path = join_lossy(osc.get(2..).unwrap_or_default());
+        let path = path
+            .strip_prefix('"')
+            .and_then(|p| p.strip_suffix('"'))
+            .unwrap_or(&path);
+        if path.is_empty() {
+            bail!("empty ConEmu working directory");
+        }
+        Ok(OperatingSystemCommand::ConEmuCurrentWorkingDirectory(
+            path.to_string(),
+        ))
     }
 
     fn parse_reset_colors(osc: &[&[u8]]) -> Result<Self> {
@@ -318,37 +357,24 @@ impl OperatingSystemCommand {
             SetHyperlink => Ok(OperatingSystemCommand::SetHyperlink(Hyperlink::parse(osc)?)),
             ManipulateSelectionData => Self::parse_selection(osc),
             SystemNotification => {
-                if osc.len() >= 3 && osc[1] == b"4" {
-                    fn get_pct(v: &&[u8]) -> u8 {
-                        let number = str::from_utf8(v).unwrap_or("0");
-                        number.parse::<u8>().unwrap_or(0).max(0).min(100)
-                    }
-                    match osc[2] {
-                        b"0" => return Ok(OperatingSystemCommand::ConEmuProgress(Progress::None)),
-                        b"1" => {
-                            let pct = osc.get(3).map(get_pct).unwrap_or(0);
-                            return Ok(OperatingSystemCommand::ConEmuProgress(
-                                Progress::SetPercentage(pct),
-                            ));
-                        }
-                        b"2" => {
-                            let pct = osc.get(3).map(get_pct).unwrap_or(0);
-                            return Ok(OperatingSystemCommand::ConEmuProgress(Progress::SetError(
-                                pct,
-                            )));
-                        }
-                        b"3" => {
-                            return Ok(OperatingSystemCommand::ConEmuProgress(
-                                Progress::SetIndeterminate,
-                            ));
-                        }
-                        b"4" => {
-                            return Ok(OperatingSystemCommand::ConEmuProgress(Progress::Paused));
-                        }
-                        _ => {}
-                    }
+                if osc.len() < 2 {
+                    bail!("wrong param count");
                 }
-                single_string!(SystemNotification)
+                // ConEmu overloads OSC 9 with numbered sub-commands;
+                // anything else is an iTerm2 style notification
+                let sub_command = str::from_utf8(osc[1])
+                    .ok()
+                    .and_then(|s| s.parse::<u8>().ok());
+                match sub_command {
+                    Some(4) => Self::parse_conemu_progress(osc),
+                    Some(9) => Self::parse_conemu_cwd(osc),
+                    Some(1..=12) => bail!("unsupported ConEmu OSC 9 sub-command"),
+                    // The message is everything after `9;`, including
+                    // any semicolons
+                    _ => Ok(OperatingSystemCommand::SystemNotification(join_lossy(
+                        &osc[1..],
+                    ))),
+                }
             }
             SetCurrentWorkingDirectory => single_string!(CurrentWorkingDirectory),
             ITermProprietary => {
@@ -612,6 +638,7 @@ impl Display for OperatingSystemCommand {
             ConEmuProgress(Progress::SetError(pct)) => write!(f, "9;4;2;{pct}")?,
             ConEmuProgress(Progress::SetIndeterminate) => write!(f, "9;4;3")?,
             ConEmuProgress(Progress::Paused) => write!(f, "9;4;4")?,
+            ConEmuCurrentWorkingDirectory(path) => write!(f, "9;9;\"{path}\"")?,
         };
         // Use the longer form ST as neovim doesn't like the BEL version
         write!(f, "\x1b\\")?;
@@ -1742,6 +1769,52 @@ mod test {
         assert_eq!(
             parse(&["9", "4", "4"], "\x1b]9;4;4\x1b\\"),
             OperatingSystemCommand::ConEmuProgress(Progress::Paused)
+        );
+        assert_eq!(
+            parse(&["9", "4"], "\x1b]9;4\x1b\\"),
+            OperatingSystemCommand::Unspecified(vec![b"9".to_vec(), b"4".to_vec()])
+        );
+
+        assert_eq!(
+            parse(
+                &["9", "9", "\"C:\\Users\\me\""],
+                "\x1b]9;9;\"C:\\Users\\me\"\x1b\\"
+            ),
+            OperatingSystemCommand::ConEmuCurrentWorkingDirectory("C:\\Users\\me".into())
+        );
+        assert_eq!(
+            parse(&["9", "9", "/home/me;x"], "\x1b]9;9;\"/home/me;x\"\x1b\\"),
+            OperatingSystemCommand::ConEmuCurrentWorkingDirectory("/home/me;x".into())
+        );
+
+        // Other sub-commands, such as the prompt marker that Windows
+        // Terminal shell integration sends, must not become notifications
+        assert_eq!(
+            parse(&["9", "12"], "\x1b]9;12\x1b\\"),
+            OperatingSystemCommand::Unspecified(vec![b"9".to_vec(), b"12".to_vec()])
+        );
+    }
+
+    #[test]
+    fn notification() {
+        assert_eq!(
+            parse(&["9", "the tea is ready"], "\x1b]9;the tea is ready\x1b\\"),
+            OperatingSystemCommand::SystemNotification("the tea is ready".into())
+        );
+        assert_eq!(
+            parse(
+                &["9", "Build done", " 3 errors"],
+                "\x1b]9;Build done; 3 errors\x1b\\"
+            ),
+            OperatingSystemCommand::SystemNotification("Build done; 3 errors".into())
+        );
+        assert_eq!(
+            parse(&["9", "42"], "\x1b]9;42\x1b\\"),
+            OperatingSystemCommand::SystemNotification("42".into())
+        );
+        assert_eq!(
+            OperatingSystemCommand::parse(&[b"9", b"caf\xe9"]),
+            OperatingSystemCommand::SystemNotification("caf\u{fffd}".into())
         );
     }
 

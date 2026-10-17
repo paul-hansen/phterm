@@ -10,6 +10,7 @@ mod csi;
 mod image;
 mod keyboard;
 mod kitty_placeholder;
+mod notification;
 // mod selection; FIXME: port to render layer
 use crate::color::ColorPalette;
 use k9::assert_equal as assert_eq;

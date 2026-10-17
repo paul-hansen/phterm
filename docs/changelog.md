@@ -60,7 +60,12 @@ As features stabilize some brief notes about them will accumulate here.
   system's default duration on Linux, rather than staying on screen until
   dismissed. Clicking one focuses the pane, tab and window that sent it.
   On Wayland this uses xdg-activation, which also makes `window:focus()`
-  work there.
+  work there. Messages containing `;` are no longer dropped (OSC 9) or cut
+  short (OSC 777), and an empty OSC 777 title is treated as no title.
+* ConEmu's `OSC 9;9` sets the working directory like OSC 7, and its other
+  `OSC 9;N` sub-commands, such as the `9;12` prompt marker sent by Windows
+  Terminal shell integration, are ignored. Previously `9;12` popped up a
+  notification reading "12" at every prompt.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.
