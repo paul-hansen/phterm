@@ -52,6 +52,10 @@ As features stabilize some brief notes about them will accumulate here.
       the scrollback is full.
     * Erasing within lines fills the cells in bulk rather than one at a
       time.
+    * Less overhead per batch of output, which mostly helps programs that
+      use synchronized output (DEC mode 2026) for every redraw. Output
+      notifications to the GUI are coalesced, which roughly halves its CPU
+      use while such a program redraws.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

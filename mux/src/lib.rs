@@ -117,29 +117,67 @@ pub struct Mux {
 
 const BUFSIZE: usize = 1024 * 1024;
 
-/// This function applies parsed actions to the pane and notifies any
-/// mux subscribers about the output event
-fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: Vec<Action>) {
-    let start = Instant::now();
-    match pane.upgrade() {
-        Some(pane) => {
-            pane.perform_actions(actions);
-            histogram!("send_actions_to_mux.perform_actions.latency").record(start.elapsed());
-            Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
-        }
-        None => {
-            // Something else removed the pane from
-            // the mux, so signal that we should stop
-            // trying to process it in read_from_pane_pty.
-            dead.store(true, Ordering::Relaxed);
+/// Applies the actions parsed by a pane's parser thread to the pane and
+/// notifies mux subscribers about the output
+struct PaneActionSink {
+    pane: Weak<dyn Pane>,
+    dead: Arc<AtomicBool>,
+    /// Set while a PaneOutput notification is queued for the main thread
+    /// but not yet delivered. Output applied in the meantime is covered by
+    /// that notification, so another isn't queued for it.
+    notify_pending: Arc<AtomicBool>,
+    // Registered once: the histogram! macro looks the histogram up in a
+    // shared, locked map every time it's used.
+    perform_latency: metrics::Histogram,
+    rate: metrics::Histogram,
+}
+
+impl PaneActionSink {
+    fn new(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>) -> Self {
+        Self {
+            pane,
+            dead: Arc::clone(dead),
+            notify_pending: Arc::new(AtomicBool::new(false)),
+            perform_latency: histogram!("send_actions_to_mux.perform_actions.latency"),
+            rate: histogram!("send_actions_to_mux.rate"),
         }
     }
-    histogram!("send_actions_to_mux.rate").record(1.);
+
+    fn send(&self, actions: Vec<Action>) {
+        let start = Instant::now();
+        match self.pane.upgrade() {
+            Some(pane) => {
+                pane.perform_actions(actions);
+                self.perform_latency.record(start.elapsed());
+                if !self.notify_pending.swap(true, Ordering::AcqRel) {
+                    let pending = Arc::clone(&self.notify_pending);
+                    let pane_id = pane.pane_id();
+                    promise::spawn::spawn_into_main_thread(async move {
+                        // Clear this first, so that any output applied from
+                        // here on queues a fresh notification
+                        pending.store(false, Ordering::Release);
+                        if let Some(mux) = Mux::try_get() {
+                            mux.notify(MuxNotification::PaneOutput(pane_id));
+                        }
+                    })
+                    .detach();
+                }
+            }
+            None => {
+                // Something else removed the pane from
+                // the mux, so signal that we should stop
+                // trying to process it in read_from_pane_pty.
+                self.dead.store(true, Ordering::Relaxed);
+            }
+        }
+        self.rate.record(1.);
+    }
 }
 
 /// This is the parsing loop for the given pane.
 /// It reads all data sent to `rx` (from pane PTY) and handles all terminal events for this pane.
 fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
+    let sink = PaneActionSink::new(pane, dead);
     let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
     let mut parser = termwiz::escape::parser::Parser::new();
     let mut actions = vec![];
@@ -169,8 +207,13 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                             // => We hold off ~all actions that applies changes to the terminal.
                             hold = true;
 
-                            // => We also flush prior actions
-                            flush = true;
+                            // => We also flush prior actions. The terminal ignores
+                            //    this action itself, so rather than flushing it on its
+                            //    own, it's held along with the frame.
+                            if !actions.is_empty() {
+                                sink.send(std::mem::take(&mut actions));
+                                action_size = 0;
+                            }
                         }
                         Action::CSI(CSI::Mode(Mode::ResetDecPrivateMode(
                             DecPrivateMode::Code(DecPrivateModeCode::SynchronizedOutput),
@@ -190,7 +233,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                     action.append_to(&mut actions);
 
                     if flush && !actions.is_empty() {
-                        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                        sink.send(std::mem::take(&mut actions));
                         action_size = 0;
                     }
                 });
@@ -225,7 +268,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                         }
                     }
 
-                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                    sink.send(std::mem::take(&mut actions));
                     deadline = None;
                     action_size = 0;
                 }
@@ -242,7 +285,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     // for very short lived commands so that we don't forget to
     // display what they displayed.
     if !actions.is_empty() {
-        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+        sink.send(std::mem::take(&mut actions));
     }
 }
 
@@ -321,6 +364,8 @@ fn read_from_pane_pty(
         tx.write_all(banner.as_bytes()).ok();
     }
 
+    let bytes_rate = histogram!("read_from_pane_pty.bytes.rate");
+
     // Loop until the pane or the main mux thread is dead.
     // Read data from the pane pty and send it to the parser thread via tx/rx.
     while !dead.load(Ordering::Relaxed) {
@@ -334,7 +379,7 @@ fn read_from_pane_pty(
                 break;
             }
             Ok(size) => {
-                histogram!("read_from_pane_pty.bytes.rate").record(size as f64);
+                bytes_rate.record(size as f64);
                 log::trace!("read_pty pane {pane_id} read {size} bytes");
                 // Send received data to this pane parser thread.
                 if let Err(err) = tx.write_all(&buf[..size]) {
