@@ -707,90 +707,9 @@ impl Pane for QuickSelectOverlay {
     }
 
     fn get_lines(&self, lines: Range<StableRowIndex>) -> (StableRowIndex, Vec<Line>) {
-        let mut renderer = self.renderer.lock();
-        renderer.check_for_resize();
-        let dims = self.get_dimensions();
-
-        let (top, mut lines) = self.delegate.get_lines(lines);
-        let colors = renderer.config.resolved_palette.clone();
-        let disable_attr = renderer.config.quick_select_remove_styling;
-
-        // Process the lines; for the search row we want to render instead
-        // the search UI.
-        // For rows with search results, we want to highlight the matching ranges
-        let search_row = renderer.compute_search_row();
-        for (idx, line) in lines.iter_mut().enumerate() {
-            if disable_attr {
-                line.cells_mut_for_attr_changes_only()
-                    .iter_mut()
-                    .for_each(|cell| cell.attrs_mut().clear());
-            }
-            let stable_idx = idx as StableRowIndex + top;
-            renderer.dirty_results.remove(stable_idx);
-            if stable_idx == search_row {
-                // Replace with search UI
-                let rev = CellAttributes::default().set_reverse(true).clone();
-                line.fill_range(0..dims.cols, &Cell::new(' ', rev.clone()), SEQ_ZERO);
-                line.overlay_text_with_attribute(
-                    0,
-                    &format!(
-                        "Select: {}  (type highlighted prefix to {}, uppercase pastes, ESC to cancel)",
-                        renderer.selection,
-                        if renderer.args.label.is_empty() {
-                            "copy"
-                        } else {
-                            &renderer.args.label
-                        },
-                    ),
-                    rev,
-                    SEQ_ZERO,
-                );
-                renderer.last_bar_pos = Some(search_row);
-            } else if let Some(matches) = renderer.by_line.get(&stable_idx) {
-                for m in matches {
-                    // highlight
-                    for cell_idx in m.range.clone() {
-                        if let Some(cell) = line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
-                        {
-                            cell.attrs_mut()
-                                .set_background(
-                                    colors
-                                        .quick_select_match_bg
-                                        .unwrap_or(AnsiColor::Black.into()),
-                                )
-                                .set_foreground(
-                                    colors
-                                        .quick_select_match_fg
-                                        .unwrap_or(AnsiColor::Green.into()),
-                                )
-                                .set_reverse(false)
-                                .set_intensity(Intensity::Bold);
-                        }
-                    }
-                    for (idx, c) in m.label.chars().enumerate() {
-                        let mut attr = line
-                            .get_cell(idx)
-                            .map(|cell| cell.attrs().clone())
-                            .unwrap_or_else(|| CellAttributes::default());
-                        attr.set_background(
-                            colors
-                                .quick_select_label_bg
-                                .unwrap_or(AnsiColor::Black.into()),
-                        )
-                        .set_foreground(
-                            colors
-                                .quick_select_label_fg
-                                .unwrap_or(AnsiColor::Olive.into()),
-                        )
-                        .set_reverse(false)
-                        .set_intensity(Intensity::Bold);
-                        line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
-                    }
-                }
-            }
-        }
-
-        (top, lines)
+        // Go through with_lines_mut so that this returns exactly what gets
+        // rendered, rather than a second copy of the decoration logic.
+        mux::pane::impl_get_lines_via_with_lines(self, lines)
     }
 
     fn get_dimensions(&self) -> RenderableDimensions {

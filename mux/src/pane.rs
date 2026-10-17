@@ -684,6 +684,21 @@ mod test {
     }
 
     #[test]
+    fn get_lines_via_with_lines_returns_what_with_lines_mut_supplies() {
+        // Overlays implement get_lines this way so that it can't drift from
+        // the decorated lines their with_lines_mut hands to the renderer.
+        let pane = FakePane {
+            lines: Mutex::new(physical_lines_from_text("one\ntwo\nthree\nfour", 10)),
+        };
+        let (first, lines) = impl_get_lines_via_with_lines(&pane, 1..3);
+        assert_eq!(first, 1);
+        assert_eq!(
+            lines.iter().map(|l| l.as_str()).collect::<Vec<_>>(),
+            vec!["two", "three"]
+        );
+    }
+
+    #[test]
     fn key_input_needs_repaint_by_default() {
         // Overlays and the client pane's predictive echo change what they
         // render synchronously in response to keys, so skipping the GUI

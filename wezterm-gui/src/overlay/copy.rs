@@ -1509,90 +1509,9 @@ impl Pane for CopyOverlay {
     }
 
     fn get_lines(&self, lines: Range<StableRowIndex>) -> (StableRowIndex, Vec<Line>) {
-        let mut renderer = self.render.lock();
-        if self.delegate.get_current_seqno() > renderer.last_result_seqno {
-            renderer.update_search();
-        }
-
-        renderer.check_for_resize();
-        let dims = self.get_dimensions();
-
-        let (top, mut lines) = self.delegate.get_lines(lines);
-
-        let config = config::configuration();
-        let colors = &config.resolved_palette;
-
-        // Process the lines; for the search row we want to render instead
-        // the search UI.
-        // For rows with search results, we want to highlight the matching ranges
-        let search_row = renderer.compute_search_row();
-        for (idx, line) in lines.iter_mut().enumerate() {
-            let stable_idx = idx as StableRowIndex + top;
-            renderer.dirty_results.remove(stable_idx);
-            let pattern = renderer.get_pattern();
-            if stable_idx == search_row && (renderer.editing_search || !pattern.is_empty()) {
-                // Replace with search UI
-                let rev = CellAttributes::default().set_reverse(true).clone();
-                line.fill_range(0..dims.cols, &Cell::new(' ', rev.clone()), SEQ_ZERO);
-                let mode = &match pattern {
-                    Pattern::CaseSensitiveString(_) => "case-sensitive",
-                    Pattern::CaseInSensitiveString(_) => "ignore-case",
-                    Pattern::CaseSmartString(_) => "smart-case",
-                    Pattern::Regex(_) => "regex",
-                };
-                line.overlay_text_with_attribute(
-                    0,
-                    &format!(
-                        "Search: {} ({}/{} matches. {})",
-                        *pattern,
-                        renderer.result_pos.map(|x| x + 1).unwrap_or(0),
-                        renderer.results.len(),
-                        mode
-                    ),
-                    rev,
-                    SEQ_ZERO,
-                );
-                renderer.last_bar_pos = Some(search_row);
-            } else if let Some(matches) = renderer.by_line.get(&stable_idx) {
-                for m in matches {
-                    // highlight
-                    for cell_idx in m.range.clone() {
-                        if let Some(cell) = line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
-                        {
-                            if Some(m.result_index) == renderer.result_pos {
-                                cell.attrs_mut()
-                                    .set_background(
-                                        colors
-                                            .copy_mode_active_highlight_bg
-                                            .unwrap_or(AnsiColor::Yellow.into()),
-                                    )
-                                    .set_foreground(
-                                        colors
-                                            .copy_mode_active_highlight_fg
-                                            .unwrap_or(AnsiColor::Black.into()),
-                                    )
-                                    .set_reverse(false);
-                            } else {
-                                cell.attrs_mut()
-                                    .set_background(
-                                        colors
-                                            .copy_mode_inactive_highlight_bg
-                                            .unwrap_or(AnsiColor::Fuchsia.into()),
-                                    )
-                                    .set_foreground(
-                                        colors
-                                            .copy_mode_inactive_highlight_fg
-                                            .unwrap_or(AnsiColor::Black.into()),
-                                    )
-                                    .set_reverse(false);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        (top, lines)
+        // Go through with_lines_mut so that this returns exactly what gets
+        // rendered, rather than a second copy of the decoration logic.
+        mux::pane::impl_get_lines_via_with_lines(self, lines)
     }
 
     fn get_dimensions(&self) -> RenderableDimensions {
