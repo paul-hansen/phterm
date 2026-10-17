@@ -59,6 +59,8 @@ fn show_notif_impl(toast: TN) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(url) = toast.url.as_ref() {
                     wezterm_open_url::open_url(url);
                 }
+            } else if let Some(on_activate) = toast.on_activate.as_ref() {
+                on_activate.call(None);
             }
 
             Ok(())

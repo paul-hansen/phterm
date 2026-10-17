@@ -3,7 +3,7 @@
 #![cfg(all(not(target_os = "macos"), not(windows)))]
 
 use crate::ToastNotification;
-use futures_util::stream::{abortable, StreamExt};
+use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use zbus::proxy;
@@ -59,6 +59,11 @@ trait Notifications {
 
     #[zbus(signal)]
     fn notification_closed(&self, nid: u32, reason: u32) -> zbus::Result<()>;
+
+    /// Sent just before action_invoked by servers that support
+    /// xdg-activation, so that the client can raise its window
+    #[zbus(signal)]
+    fn activation_token(&self, nid: u32, activation_token: String) -> zbus::Result<()>;
 }
 
 /// Timeout/expiration was reached
@@ -93,16 +98,44 @@ async fn show_notif_impl(notif: ToastNotification) -> Result<(), Box<dyn std::er
 
     let proxy = NotificationsProxy::new(&connection).await?;
     let caps = proxy.get_capabilities().await?;
+    let has_actions = caps.iter().any(|cap| cap == "actions");
 
-    if notif.url.is_some() && !caps.iter().any(|cap| cap == "actions") {
+    if notif.url.is_some() && !has_actions {
         // Server doesn't support actions, so skip showing this notification
         // because it might have text that says "click to see more"
         // and that just wouldn't work.
         return Ok(());
     }
 
+    let actions: &[&str] = if notif.url.is_some() {
+        &["show", "Show"]
+    } else if notif.on_activate.is_some() && has_actions {
+        // The "default" action is invoked by clicking on the notification
+        &["default", "Show"]
+    } else {
+        &[]
+    };
+
     let mut hints = HashMap::new();
-    hints.insert("urgency", Value::U8(2 /* Critical */));
+    // Persistent notifications are important ones like errors and
+    // updates; anything else uses normal urgency, as many servers
+    // never expire critical notifications
+    let urgency = if notif.persistent { 2 } else { 1 };
+    hints.insert("urgency", Value::U8(urgency));
+
+    let expire_timeout = match notif.timeout {
+        Some(d) => d.as_millis() as i32,
+        // Never expire
+        None if notif.persistent => 0,
+        // Use the server default
+        None => -1,
+    };
+
+    // Subscribe before showing the notification so that we can't miss
+    // signals, and use a single stream so that we see the activation
+    // token before the action that it belongs to
+    let mut signals = proxy.inner().receive_all_signals().await?;
+
     let notification = proxy
         .notify(
             "wezterm",
@@ -110,45 +143,37 @@ async fn show_notif_impl(notif: ToastNotification) -> Result<(), Box<dyn std::er
             "org.wezfurlong.wezterm",
             &notif.title,
             &notif.message,
-            if notif.url.is_some() {
-                &["show", "Show"]
-            } else {
-                &[]
-            },
+            actions,
             &hints,
-            notif.timeout.map(|d| d.as_millis() as _).unwrap_or(0),
+            expire_timeout,
         )
         .await?;
 
-    let (mut invoked_stream, abort_invoked) = abortable(proxy.receive_action_invoked().await?);
-    let (mut closed_stream, abort_closed) = abortable(proxy.receive_notification_closed().await?);
-
-    futures_util::try_join!(
-        async {
-            while let Some(signal) = invoked_stream.next().await {
-                let args = signal.args()?;
-                if args.nid == notification {
-                    if let Some(url) = notif.url.as_ref() {
-                        wezterm_open_url::open_url(url);
-                        abort_closed.abort();
-                        break;
-                    }
-                }
+    let mut activation_token = None;
+    while let Some(msg) = signals.next().await {
+        if let Some(signal) = ActivationToken::from_message(msg.clone()) {
+            let args = signal.args()?;
+            if args.nid == notification {
+                activation_token.replace(args.activation_token);
             }
-            Ok::<(), zbus::Error>(())
-        },
-        async {
-            while let Some(signal) = closed_stream.next().await {
-                let args = signal.args()?;
-                let _reason = Reason::new(args.reason);
-                if args.nid == notification {
-                    abort_invoked.abort();
-                    break;
+        } else if let Some(signal) = ActionInvoked::from_message(msg.clone()) {
+            let args = signal.args()?;
+            if args.nid == notification {
+                if let Some(url) = notif.url.as_ref() {
+                    wezterm_open_url::open_url(url);
+                } else if let Some(on_activate) = notif.on_activate.as_ref() {
+                    on_activate.call(activation_token.take());
                 }
+                break;
             }
-            Ok(())
+        } else if let Some(signal) = NotificationClosed::from_message(msg) {
+            let args = signal.args()?;
+            let _reason = Reason::new(args.reason);
+            if args.nid == notification {
+                break;
+            }
         }
-    )?;
+    }
 
     Ok(())
 }

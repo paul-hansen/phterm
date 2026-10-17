@@ -323,6 +323,13 @@ pub trait WindowOps {
     fn restore(&self) {}
     fn focus(&self) {}
 
+    /// Focus the window using an activation token obtained from another
+    /// client, such as a notification server. Platforms that don't use
+    /// activation tokens fall back to `focus`.
+    fn focus_with_activation_token(&self, _token: Option<String>) {
+        self.focus()
+    }
+
     fn toggle_fullscreen(&self) {}
 
     fn config_did_change(&self, _config: &config::ConfigHandle) {}

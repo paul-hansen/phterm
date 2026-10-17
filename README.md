@@ -25,6 +25,11 @@ Sponsor Wez at https://wezterm.org/sponsor.html
   Rendering no longer blocks the processing of output, plain ASCII text is written to
   the screen in bulk, and full-screen programs such as vim no longer pay for scrollback
   compression on the alternate screen.
+- Better notifications from programs such as Claude Code (OSC 9 and OSC 777). Clicking
+  one takes you to the pane, tab and window that sent it, and on Linux they expire after
+  the system's default duration instead of staying on screen until dismissed. On
+  Wayland, raising the window uses xdg-activation, which also makes `window:focus()`
+  work there.
 
 See the [changelog](docs/changelog.md) for details. Everything else is upstream
 wezterm, so the [upstream docs](https://wezterm.org/) apply and your existing

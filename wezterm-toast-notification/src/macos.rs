@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")]
 
-use crate::ToastNotification;
+use crate::{ActivateHandler, ToastNotification};
 use block2::{Block, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObject, NSObjectProtocol, ProtocolObject};
@@ -12,7 +12,8 @@ use objc2_user_notifications::{
     UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse,
     UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
-use std::sync::{LazyLock, Once};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, Once};
 
 const NEEDS_SIGN: &str = "Note that the application must be code-signed \
                           for UNUserNotificationCenter to work";
@@ -68,10 +69,15 @@ define_class!(
 
             log::debug!("did_receive_notification -> action={action:?} url={url:?}");
 
+            let identifier = response.notification().request().identifier().to_string();
+            let on_activate = ACTIVATE_HANDLERS.lock().unwrap().remove(&identifier);
+
             if let Some(url) = url {
                 if let Ok(url_str) = url.downcast::<NSString>() {
                     wezterm_open_url::open_url(&url_str.to_string());
                 }
+            } else if let Some(on_activate) = on_activate {
+                on_activate.call(None);
             }
 
             completion_handler.call(());
@@ -96,6 +102,10 @@ impl Drop for NotifDelegate {
 
 const CENTER: LazyLock<Retained<UNUserNotificationCenter>> =
     LazyLock::new(UNUserNotificationCenter::currentNotificationCenter);
+
+/// Click handlers for delivered notifications, keyed by request identifier
+static ACTIVATE_HANDLERS: LazyLock<Mutex<HashMap<String, ActivateHandler>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn initialize() {
     static INIT: Once = Once::new();
@@ -168,6 +178,14 @@ pub fn show_notif(toast: ToastNotification) -> Result<(), Box<dyn std::error::Er
         }
 
         let identifier = uuid::Uuid::new_v4().to_string();
+        if toast.url.is_none() {
+            if let Some(on_activate) = toast.on_activate.clone() {
+                ACTIVATE_HANDLERS
+                    .lock()
+                    .unwrap()
+                    .insert(identifier.clone(), on_activate);
+            }
+        }
         let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
             &NSString::from_str(&identifier),
             &*notif,
@@ -191,6 +209,7 @@ pub fn show_notif(toast: ToastNotification) -> Result<(), Box<dyn std::error::Er
                             let ident_array =
                                 NSArray::from_retained_slice(&[NSString::from_str(&identifier)]);
                             CENTER.removeDeliveredNotificationsWithIdentifiers(&ident_array);
+                            ACTIVATE_HANDLERS.lock().unwrap().remove(&identifier);
                         });
                     }
                 } else {

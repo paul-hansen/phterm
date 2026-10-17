@@ -56,6 +56,11 @@ As features stabilize some brief notes about them will accumulate here.
       use synchronized output (DEC mode 2026) for every redraw. Output
       notifications to the GUI are coalesced, which roughly halves its CPU
       use while such a program redraws.
+* Notifications from programs (OSC 9 and OSC 777) now expire after the
+  system's default duration on Linux, rather than staying on screen until
+  dismissed. Clicking one focuses the pane, tab and window that sent it.
+  On Wayland this uses xdg-activation, which also makes `window:focus()`
+  work there.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

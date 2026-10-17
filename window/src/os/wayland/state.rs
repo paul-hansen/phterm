@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use smithay_client_toolkit::activation::{ActivationHandler, ActivationState, RequestData};
 use smithay_client_toolkit::compositor::{CompositorState, SurfaceData};
 use smithay_client_toolkit::data_device_manager::data_device::DataDevice;
 use smithay_client_toolkit::data_device_manager::data_source::CopyPasteSource;
@@ -23,7 +24,7 @@ use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::subcompositor::SubcompositorState;
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_data_device, delegate_output, delegate_pointer, delegate_primary_selection, delegate_registry, delegate_seat, delegate_shm, delegate_subcompositor, delegate_xdg_shell, delegate_xdg_window, registry_handlers
+    delegate_activation, delegate_compositor, delegate_data_device, delegate_output, delegate_pointer, delegate_primary_selection, delegate_registry, delegate_seat, delegate_shm, delegate_subcompositor, delegate_xdg_shell, delegate_xdg_window, registry_handlers
 };
 use wayland_client::backend::ObjectId;
 use wayland_client::globals::GlobalList;
@@ -92,6 +93,8 @@ pub(super) struct WaylandState {
     pub(super) kde_blur_manager: Option<OrgKdeKwinBlurManager>,
     pub(super) ext_background_effect_manager: Option<ExtBackgroundEffectManagerV1>,
     pub(super) ext_background_effect_can_blur: bool,
+    /// None if the compositor doesn't support xdg-activation
+    pub(super) activation: Option<ActivationState>,
 }
 
 impl WaylandState {
@@ -142,6 +145,7 @@ impl WaylandState {
             kde_blur_manager,
             ext_background_effect_manager,
             ext_background_effect_can_blur: false,
+            activation: ActivationState::bind(globals, qh).ok(),
         };
         Ok(wayland_state)
     }
@@ -179,7 +183,20 @@ impl OutputHandler for WaylandState {
     }
 }
 
+impl ActivationHandler for WaylandState {
+    type RequestData = RequestData;
+
+    fn new_token(&mut self, token: String, data: &RequestData) {
+        if let (Some(activation), Some(surface)) = (self.activation.as_ref(), data.surface.as_ref())
+        {
+            activation.activate::<Self>(surface, token);
+        }
+    }
+}
+
 delegate_registry!(WaylandState);
+
+delegate_activation!(WaylandState);
 
 delegate_shm!(WaylandState);
 

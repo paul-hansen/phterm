@@ -20,6 +20,7 @@ use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
     WaylandWindowHandle, WindowHandle,
 };
+use smithay_client_toolkit::activation::RequestData;
 use smithay_client_toolkit::compositor::{CompositorHandler, SurfaceData, SurfaceDataExt};
 use smithay_client_toolkit::data_device_manager::ReadPipe;
 use smithay_client_toolkit::globals::GlobalData;
@@ -519,6 +520,17 @@ impl WindowOps for WaylandWindow {
 
     fn restore(&self) {
         WaylandConnection::with_window_inner(self.0, move |inner| Ok(inner.restore()));
+    }
+
+    fn focus(&self) {
+        self.focus_with_activation_token(None)
+    }
+
+    fn focus_with_activation_token(&self, token: Option<String>) {
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.activate(token);
+            Ok(())
+        });
     }
 
     fn config_did_change(&self, config: &ConfigHandle) {
@@ -1130,6 +1142,42 @@ impl WaylandWindowInner {
         self.events.dispatch(WindowEvent::NeedRepaint);
 
         Ok(())
+    }
+
+    fn activate(&mut self, token: Option<String>) {
+        if self.window.is_none() {
+            return;
+        }
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let state = conn.wayland_state.borrow();
+        let Some(activation) = state.activation.as_ref() else {
+            log::debug!("compositor doesn't support xdg-activation");
+            return;
+        };
+        let surface = self.surface().clone();
+        match token {
+            Some(token) => activation.activate::<WaylandState>(&surface, token),
+            None => {
+                // Request a token of our own; the compositor decides whether
+                // it is fresh enough to steal focus, and may instead mark the
+                // window as demanding attention. The window is activated in
+                // WaylandState::new_token.
+                let qh = conn.event_queue.borrow().handle();
+                let seat_and_serial = state
+                    .seat
+                    .seats()
+                    .next()
+                    .map(|seat| (seat, *state.last_serial.borrow()));
+                activation.request_token(
+                    &qh,
+                    RequestData {
+                        app_id: None,
+                        seat_and_serial,
+                        surface: Some(surface),
+                    },
+                );
+            }
+        }
     }
 
     fn surface(&self) -> &WlSurface {
