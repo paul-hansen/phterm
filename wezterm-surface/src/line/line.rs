@@ -190,13 +190,23 @@ impl Line {
         seqno: SequenceNo,
         blank_attr: CellAttributes,
     ) {
-        {
-            let cells = self.coerce_vec_storage();
-            for c in cells.iter_mut() {
-                *c = Cell::blank_with_attrs(blank_attr.clone());
+        match &mut self.cells {
+            CellStorage::V(cells) => {
+                for c in cells.iter_mut() {
+                    *c = Cell::blank_with_attrs(blank_attr.clone());
+                }
+                cells.resize_with(width, || Cell::blank_with_attrs(blank_attr.clone()));
+                cells.shrink_to_fit();
             }
-            cells.resize_with(width, || Cell::blank_with_attrs(blank_attr.clone()));
-            cells.shrink_to_fit();
+            CellStorage::C(_) => {
+                // Every cell is replaced, so there's no point in first
+                // converting the clustered cells to a vec
+                self.cells =
+                    CellStorage::V(VecStorage::new(vec![
+                        Cell::blank_with_attrs(blank_attr);
+                        width
+                    ]));
+            }
         }
         self.update_last_change_seqno(seqno);
         self.invalidate_zones();

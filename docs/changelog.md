@@ -48,6 +48,8 @@ As features stabilize some brief notes about them will accumulate here.
     * Full-screen programs such as vim, which scroll regions of the
       alternate screen, are ~2x faster: lines scrolled off a screen without
       scrollback were compressed for a scrollback that doesn't exist.
+    * Output with a non-default background color scrolls ~1.7x faster once
+      the scrollback is full.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

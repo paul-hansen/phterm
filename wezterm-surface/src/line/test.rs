@@ -706,3 +706,21 @@ fn ascii_run_hyperlinks() {
     assert_ascii_run_matches_per_cell(&Line::new(1), 0, "link", &explicit);
     assert_ascii_run_matches_per_cell(&"plain text".into(), 2, "link", &explicit);
 }
+
+#[test]
+fn resize_and_clear_matches_for_both_storages() {
+    let attr = CellAttributes::default()
+        .set_background(wezterm_cell::color::ColorAttribute::PaletteIndex(4))
+        .clone();
+    for width in [0, 5, 11, 20] {
+        let mut vec_line: Line = "hello wörld 中".into();
+        let mut cluster_line = clustered("hello wörld 中");
+        vec_line.resize_and_clear(width, 3, attr.clone());
+        cluster_line.resize_and_clear(width, 3, attr.clone());
+        assert_eq!(cluster_line, vec_line, "width {width}");
+        assert_eq!(cluster_line.len(), width);
+        assert!(cluster_line
+            .visible_cells()
+            .all(|c| c.str() == " " && *c.attrs() == attr));
+    }
+}
