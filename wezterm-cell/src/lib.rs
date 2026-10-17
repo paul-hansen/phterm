@@ -405,6 +405,32 @@ impl CellAttributes {
         }
         self
     }
+
+    /// Returns the image slice displayed because this cell holds a
+    /// kitty Unicode placeholder, if any
+    pub fn unicode_placeholder_image(&self) -> Option<&ImageCell> {
+        self.fat
+            .as_ref()?
+            .image
+            .iter()
+            .find(|im| im.is_unicode_placeholder())
+            .map(|im| im.as_ref())
+    }
+
+    /// Replaces the image slice displayed for a kitty Unicode placeholder,
+    /// preserving any other attached images
+    pub fn set_unicode_placeholder_image(&mut self, image: Option<Box<ImageCell>>) -> &mut Self {
+        if let Some(fat) = self.fat.as_mut() {
+            fat.image.retain(|im| !im.is_unicode_placeholder());
+        }
+        match image {
+            Some(image) => self.attach_image(image),
+            None => {
+                self.deallocate_fat_attributes_if_none();
+                self
+            }
+        }
+    }
 }
 
 impl CellAttributes {

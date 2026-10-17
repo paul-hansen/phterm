@@ -16,7 +16,8 @@ use termwiz::color::LinearRgba;
 use termwiz::surface::CursorShape;
 use wezterm_bidi::Direction;
 use wezterm_term::color::ColorAttribute;
-use wezterm_term::CellAttributes;
+use wezterm_term::image::UNICODE_PLACEHOLDER;
+use wezterm_term::{Cell, CellAttributes, Line};
 
 impl crate::TermWindow {
     /// "Render" a line of the terminal screen into the vertex buffer.
@@ -747,11 +748,13 @@ impl crate::TermWindow {
         } else {
             None
         };
+        let blanked_line = blank_unicode_placeholders(params.line);
+        let line = blanked_line.as_ref().unwrap_or(params.line);
         let cell_clusters = if let Some((cursor_x, composing)) =
             params.shape_key.as_ref().and_then(|k| k.composing.as_ref())
         {
             // Create an updated line with the composition overlaid
-            let mut line = params.line.clone();
+            let mut line = line.clone();
             let seqno = line.current_seqno();
 
             let mut compose_attrs = CellAttributes::blank();
@@ -763,7 +766,7 @@ impl crate::TermWindow {
             line.overlay_text_with_attribute(*cursor_x, &composing, compose_attrs, seqno);
             line.cluster(bidi_hint)
         } else {
-            params.line.cluster(bidi_hint)
+            line.cluster(bidi_hint)
         };
 
         let gl_state = self.render_state.as_ref().unwrap();
@@ -928,4 +931,24 @@ impl crate::TermWindow {
 
         Ok((shaped, invalidate_on_hover_change))
     }
+}
+
+/// Cells holding kitty Unicode placeholders display the image slice
+/// attached to them rather than a glyph, so returns a copy of the line
+/// with their text replaced by spaces, if it has any.
+fn blank_unicode_placeholders(line: &Line) -> Option<Line> {
+    let placeholders: Vec<(usize, CellAttributes)> = line
+        .visible_cells()
+        .filter(|cell| cell.str().starts_with(UNICODE_PLACEHOLDER))
+        .map(|cell| (cell.cell_index(), cell.attrs().clone()))
+        .collect();
+    if placeholders.is_empty() {
+        return None;
+    }
+    let mut line = line.clone();
+    let seqno = line.current_seqno();
+    for (idx, attrs) in placeholders {
+        line.set_cell(idx, Cell::new(' ', attrs), seqno);
+    }
+    Some(line)
 }

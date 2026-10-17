@@ -620,6 +620,10 @@ pub struct KittyImagePlacement {
     pub placement_id: Option<u32>,
     /// z=...
     pub z_index: Option<i32>,
+    /// Create a virtual placement that is displayed by printing
+    /// Unicode placeholder characters rather than at the cursor.
+    /// U=0, U=1
+    pub unicode_placeholder: bool,
 }
 
 impl KittyImagePlacement {
@@ -640,6 +644,10 @@ impl KittyImagePlacement {
                 _ => return None,
             },
             z_index: geti(keys, "z"),
+            unicode_placeholder: match get(keys, "U") {
+                None => false,
+                Some(v) => v.parse::<u32>().ok()? != 0,
+            },
         })
     }
 
@@ -659,6 +667,10 @@ impl KittyImagePlacement {
         }
 
         set(keys, "z", &self.z_index);
+
+        if self.unicode_placeholder {
+            keys.insert("U", "1".to_string());
+        }
     }
 }
 
@@ -1278,5 +1290,62 @@ mod test {
                 },
             }
         );
+    }
+
+    #[test]
+    fn kitty_unicode_placeholder() {
+        let placement = KittyImagePlacement {
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            x_offset: None,
+            y_offset: None,
+            columns: Some(4),
+            rows: Some(2),
+            do_not_move_cursor: false,
+            placement_id: None,
+            z_index: None,
+            unicode_placeholder: true,
+        };
+        let display = KittyImage::Display {
+            image_id: Some(42),
+            image_number: None,
+            placement: placement.clone(),
+            verbosity: KittyImageVerbosity::Quiet,
+        };
+        assert_eq!(
+            KittyImage::parse_apc("Ga=p,U=1,i=42,c=4,r=2,q=2".as_bytes()).unwrap(),
+            display
+        );
+
+        // Round trip through the encoded form
+        let encoded = format!("{}", display);
+        assert_eq!(encoded, "\x1b_GU=1,a=p,c=4,i=42,q=2,r=2");
+        assert_eq!(
+            KittyImage::parse_apc(encoded[2..].as_bytes()).unwrap(),
+            display
+        );
+
+        // kitty treats any non-zero value as true
+        assert_eq!(
+            KittyImage::parse_apc("Ga=p,U=2,i=42,c=4,r=2,q=2".as_bytes()).unwrap(),
+            display
+        );
+
+        assert_eq!(
+            KittyImage::parse_apc("Ga=p,U=0,i=42,c=4,r=2,q=2".as_bytes()).unwrap(),
+            KittyImage::Display {
+                image_id: Some(42),
+                image_number: None,
+                placement: KittyImagePlacement {
+                    unicode_placeholder: false,
+                    ..placement
+                },
+                verbosity: KittyImageVerbosity::Quiet,
+            }
+        );
+
+        assert_eq!(KittyImage::parse_apc("Ga=p,U=x,i=42".as_bytes()), None);
     }
 }

@@ -1,4 +1,5 @@
 use crate::terminalstate::image::*;
+use crate::terminalstate::kitty_placeholder::VirtualPlacements;
 use crate::terminalstate::{ImageAttachParams, PlacementInfo};
 use crate::{StableRowIndex, TerminalState};
 use ::image::{
@@ -22,8 +23,9 @@ pub struct KittyImageState {
     accumulator: Vec<KittyImage>,
     max_image_id: u32,
     number_to_id: HashMap<u32, u32>,
-    id_to_data: HashMap<u32, Arc<ImageData>>,
+    pub(super) id_to_data: HashMap<u32, Arc<ImageData>>,
     placements: HashMap<(u32, Option<u32>), PlacementInfo>,
+    pub(super) virtual_placements: VirtualPlacements,
     used_memory: usize,
 }
 
@@ -46,7 +48,13 @@ impl KittyImageState {
     fn prune_unreferenced(&mut self) {
         let budget = 320 * 1024 * 1024; // FIXME: make this configurable
         if self.used_memory > budget {
-            let referenced: HashSet<u32> = self.placements.keys().map(|(k, _)| *k).collect();
+            let referenced: HashSet<u32> = self
+                .placements
+                .keys()
+                .map(|(k, _)| k)
+                .chain(self.virtual_placements.image_ids())
+                .copied()
+                .collect();
             let target = self.used_memory - budget;
             let mut freed = 0;
             self.id_to_data.retain(|id, data| {
@@ -100,6 +108,9 @@ impl TerminalState {
             placement,
             verbosity
         );
+        if placement.unicode_placeholder {
+            return self.kitty_add_virtual_placement(image_id, &placement);
+        }
         if image_id != 0 {
             self.kitty_remove_placement(image_id, placement.placement_id);
         }
@@ -256,6 +267,9 @@ impl TerminalState {
                 );
 
                 self.kitty_remove_placement(image_id, placement_id);
+                self.kitty_img
+                    .virtual_placements
+                    .remove(image_id, placement_id);
 
                 if delete {
                     self.kitty_img.remove_data_for_id(image_id);
@@ -342,9 +356,18 @@ impl TerminalState {
             self.kitty_remove_placement_from_model(image_id, p, info);
         }
         if delete {
-            self.kitty_img.id_to_data.clear();
-            self.kitty_img.used_memory = 0;
-            self.kitty_img.number_to_id.clear();
+            // Virtual placements have no position on the screen and are
+            // not affected by this, so retain the data that they need
+            let state = &mut self.kitty_img;
+            let virtual_placements = &state.virtual_placements;
+            state
+                .id_to_data
+                .retain(|id, _| virtual_placements.has_image(*id));
+            state.used_memory = state.id_to_data.values().map(|data| data.len()).sum();
+            let id_to_data = &state.id_to_data;
+            state
+                .number_to_id
+                .retain(|_, id| id_to_data.contains_key(id));
         }
     }
 
@@ -834,6 +857,8 @@ impl TerminalState {
             .raw_image_to_image_data(img)
             .context("storing image data")?;
         self.kitty_img.record_id_to_data(image_id, img);
+        // Replacing an image deletes its virtual placements, as in kitty
+        self.kitty_img.virtual_placements.remove(image_id, None);
 
         if image_number.is_some() {
             self.kitty_send_response(
