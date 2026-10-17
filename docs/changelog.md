@@ -22,6 +22,13 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* Reduced typing latency, by changing latency-related defaults and cutting
+  redundant repaints:
+    * [max_fps](config/lua/config/max_fps.md) now defaults to `165` (was
+      `60`) and
+      [mux_output_parser_coalesce_delay_ms](config/lua/config/mux_output_parser_coalesce_delay_ms.md)
+      now defaults to `0` (was `3`). On X11 this cut keypress-to-frame
+      latency from ~18ms to ~5ms.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

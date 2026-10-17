@@ -2,12 +2,15 @@
 tags:
   - tuning
 ---
-# `max_fps = 60`
+# `max_fps = 165`
 
 Limits the maximum number of frames per second that wezterm will
 attempt to draw.
 
-Defaults to `60`.
+Defaults to `165`. {{since('nightly', inline=True)}} Previously the
+default was `60`, which added up to ~16ms of keypress-to-screen latency
+because the echoed character had to wait out the throttle interval
+started by the keypress repaint.
 
 | Environment | Supported Since |
 |-------------|-----------------|

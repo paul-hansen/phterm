@@ -1673,7 +1673,7 @@ fn default_swallow_mouse_click_on_window_focus() -> bool {
 }
 
 fn default_mux_output_parser_coalesce_delay_ms() -> u64 {
-    3
+    0
 }
 
 fn default_mux_output_parser_buffer_size() -> usize {
@@ -1822,7 +1822,9 @@ fn default_anim_fps() -> u8 {
 }
 
 fn default_max_fps() -> u64 {
-    60
+    // The keypress itself triggers a paint, so at 60 the echoed character
+    // waits out a full ~16ms throttle interval; match high refresh displays.
+    165
 }
 
 fn default_tiling_desktop_environments() -> Vec<String> {
