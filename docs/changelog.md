@@ -45,6 +45,9 @@ As features stabilize some brief notes about them will accumulate here.
       Unicode-heavy output got ~20x faster and dense output ~2x.
     * Runs of plain ASCII text are written to the screen in bulk rather
       than a character at a time, making text-heavy output ~2x faster.
+    * Full-screen programs such as vim, which scroll regions of the
+      alternate screen, are ~2x faster: lines scrolled off a screen without
+      scrollback were compressed for a scrollback that doesn't exist.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

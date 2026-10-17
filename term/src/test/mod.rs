@@ -1122,6 +1122,45 @@ fn test_scrollup() {
     assert_eq!(term.screen().visible_row_to_stable_row(0), 7);
 }
 
+/// Lines scrolled off the top are recycled as the new bottom line, cleared
+/// to the current background. Covers the alternate screen, which has no
+/// scrollback, and a primary screen whose scrollback is full, where the
+/// recycled lines are the oldest, compressed, scrollback lines.
+#[test]
+fn test_scrollup_clears_recycled_lines_to_background() {
+    use wezterm_cell::color::ColorAttribute;
+    let bg = ColorAttribute::PaletteIndex(4);
+
+    for alt_screen in [false, true] {
+        let mut term = TestTerm::new(3, 4, 2);
+        if alt_screen {
+            term.print("\x1b[?1049h");
+        }
+        term.print("\x1b[44m");
+        for i in 0..8 {
+            term.print(format!("{i}\r\n"));
+        }
+
+        let lines = term.screen().visible_lines();
+        let text: Vec<_> = lines.iter().map(|l| l.as_str().into_owned()).collect();
+        assert_eq!(
+            text,
+            vec!["6   ", "7   ", "    "],
+            "alt_screen={}",
+            alt_screen
+        );
+        for line in &lines {
+            assert_eq!(line.len(), 4, "alt_screen={}", alt_screen);
+            assert!(
+                line.visible_cells().all(|c| c.attrs().background() == bg),
+                "alt_screen={} {:?}",
+                alt_screen,
+                line
+            );
+        }
+    }
+}
+
 #[test]
 fn test_ri() {
     let mut term = TestTerm::new(3, 1, 10);

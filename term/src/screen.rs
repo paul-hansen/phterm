@@ -702,7 +702,10 @@ impl Screen {
             }
         };
 
-        if scroll_region.start == 0 {
+        // Lines kept in scrollback are compressed. Without scrollback (eg: the
+        // alternate screen), they are discarded or cleared for reuse below,
+        // so compressing them would be wasted work.
+        if scrollback_ok {
             for y in self.phys_range(&(0..num_rows as VisibleRowIndex)) {
                 self.line_mut(y).compress_for_scrollback();
             }
