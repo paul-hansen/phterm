@@ -1,7 +1,7 @@
 name: release
 
-# Builds release packages for Linux, macOS and Windows and publishes them
-# as a GitHub release on this repository.
+# Builds release packages for Linux (Debian/Ubuntu, AppImage, Arch), macOS and
+# Windows and publishes them as a GitHub release on this repository.
 #
 # Trigger it either by pushing a tag (`ci/tag.sh && git push --tags`), or
 # by running the workflow manually from the Actions tab, which tags the
@@ -63,6 +63,27 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Release tag: $tag"
 
+  # Built once and shared: the Arch package's PKGBUILD pins this exact
+  # tarball's checksum, and ci/source-archive.sh isn't byte-reproducible.
+  source:
+    needs: meta
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ needs.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: "recursive"
+      - name: "Source Tarball"
+        shell: bash
+        run: "bash ci/source-archive.sh"
+      - name: "Upload artifact"
+        uses: actions/upload-artifact@v7
+        with:
+          name: "source"
+          if-no-files-found: error
+          path: "*src.tar.gz"
+
   linux:
     needs: meta
     runs-on: ubuntu-latest
@@ -106,10 +127,6 @@ jobs:
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
-      - name: "Source Tarball"
-        if: matrix.appimage
-        shell: bash
-        run: "bash ci/source-archive.sh"
       - name: "Build AppImage"
         if: matrix.appimage
         shell: bash
@@ -124,9 +141,51 @@ jobs:
           path: |
             wezterm-*.deb
             wezterm-*.xz
-            *src.tar.gz
             *.AppImage
             *.AppImage.zsync
+
+  # Native Arch package (ci/arch/PKGBUILD), built from the release's source
+  # tarball so the PKGBUILD attached to the release rebuilds the same thing.
+  arch:
+    needs: [meta, source]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    env:
+      TAG_NAME: ${{ needs.meta.outputs.tag }}
+      # makepkg pulls in the toolchain itself; no sccache in this container
+      RUSTC_WRAPPER: ""
+    steps:
+      - name: "Install build tools"
+        shell: bash
+        run: pacman -Syu --noconfirm --needed git pacman-contrib sudo
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: ci/arch
+      - name: "Download source tarball"
+        uses: actions/download-artifact@v8
+        with:
+          name: "source"
+          path: build
+      - name: "Build package"
+        shell: bash
+        run: |
+          # makepkg refuses to run as root
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          sed "s/@TAG@/$TAG_NAME/" ci/arch/PKGBUILD > build/PKGBUILD
+          chown -R builder build
+          cd build
+          sudo -u builder updpkgsums
+          sudo -u builder makepkg --syncdeps --noconfirm
+      - name: "Upload artifact"
+        uses: actions/upload-artifact@v7
+        with:
+          name: "arch"
+          if-no-files-found: error
+          path: |
+            build/*.pkg.tar.zst
+            build/PKGBUILD
 
   macos:
     needs: meta
@@ -206,7 +265,7 @@ jobs:
             WezTerm-*.exe
 
   release:
-    needs: [meta, linux, macos, windows]
+    needs: [meta, source, linux, arch, macos, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

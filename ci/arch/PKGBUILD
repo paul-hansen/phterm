@@ -1,0 +1,79 @@
+# Arch Linux package for phterm, built from a release's source tarball.
+#
+# The release workflow fills in @TAG@ and the checksum, builds the package in
+# an archlinux container, and attaches both the package and the filled-in
+# PKGBUILD to the release. To build one locally instead, download that
+# PKGBUILD from the release and run `makepkg -si` next to it.
+#
+# Installs as `phterm`, replacing the distro's `wezterm` package: same files,
+# so anything depending on `wezterm` stays satisfied.
+
+pkgname=phterm
+_tag=@TAG@
+pkgver=${_tag//-/.}
+pkgrel=1
+pkgdesc='Personal fork of the WezTerm GPU-accelerated terminal emulator'
+arch=('x86_64')
+url='https://github.com/paul-hansen/phterm'
+license=('MIT')
+provides=('wezterm')
+conflicts=('wezterm')
+depends=(
+  'fontconfig'
+  'glibc'
+  'hicolor-icon-theme'
+  'libgcc'
+  # Listed so the build links the system copy (git2-sys uses it when found)
+  # instead of depending on whether the build machine happens to have it.
+  'libgit2'
+  'libstdc++'
+  'libx11'
+  'libxcb'
+  'libxkbcommon'
+  'libxkbcommon-x11'
+  'openssl'
+  'wayland'
+  'xcb-util'
+  'xcb-util-image'
+  'zlib'
+)
+makedepends=('cargo' 'cmake' 'git' 'pkgconf' 'python')
+optdepends=(
+  'ncurses: for wezterm terminfo database'
+  'python-nautilus: WezTerm context menu in Nautilus'
+)
+# makepkg's LTO flags break the vendored C deps (same as Arch's wezterm)
+options=('!lto' '!debug')
+source=("${url}/releases/download/${_tag}/wezterm-${_tag}-src.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "wezterm-${_tag}"
+  cargo build --release --locked \
+    -p wezterm -p wezterm-gui -p wezterm-mux-server -p strip-ansi-escapes
+}
+
+package() {
+  cd "wezterm-${_tag}"
+  install -Dm755 target/release/wezterm -t "${pkgdir}/usr/bin"
+  install -Dm755 target/release/wezterm-gui -t "${pkgdir}/usr/bin"
+  install -Dm755 target/release/wezterm-mux-server -t "${pkgdir}/usr/bin"
+  install -Dm755 target/release/strip-ansi-escapes -t "${pkgdir}/usr/bin"
+  install -Dm755 assets/open-wezterm-here -t "${pkgdir}/usr/bin"
+  install -Dm644 assets/icon/terminal.png \
+    "${pkgdir}/usr/share/icons/hicolor/128x128/apps/org.wezfurlong.wezterm.png"
+  install -Dm644 assets/wezterm.desktop \
+    "${pkgdir}/usr/share/applications/org.wezfurlong.wezterm.desktop"
+  install -Dm644 assets/wezterm.appdata.xml \
+    "${pkgdir}/usr/share/metainfo/org.wezfurlong.wezterm.appdata.xml"
+  install -Dm644 assets/wezterm-nautilus.py \
+    "${pkgdir}/usr/share/nautilus-python/extensions/wezterm-nautilus.py"
+  install -Dm644 assets/shell-integration/wezterm.sh -t "${pkgdir}/etc/profile.d"
+  install -Dm644 assets/shell-completion/bash \
+    "${pkgdir}/usr/share/bash-completion/completions/wezterm"
+  install -Dm644 assets/shell-completion/fish \
+    "${pkgdir}/usr/share/fish/vendor_completions.d/wezterm.fish"
+  install -Dm644 assets/shell-completion/zsh \
+    "${pkgdir}/usr/share/zsh/site-functions/_wezterm"
+  install -Dm644 LICENSE.md -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}
